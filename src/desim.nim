@@ -148,19 +148,18 @@ proc newSimulator*(quitTime: SimulationTime = 0): Simulator =
 proc currentTime*(sim: Simulator): SimulationTime =
   return sim.currentTime
 
-macro connect*(sim: Simulator, link: var Link, comp: Component, endpoint: untyped): untyped =
-  ## Connect a link and an endpoint. Prefer over ``connectLink``.
-  result = quote do:
-    connectLink(`sim`, `link`, proc (msg: Message) = `endpoint`(`comp`, msg))
-
-proc connectLink*(sim: Simulator, link: var Link, endpoint: LinkEndpoint) =
-  ## Connect a link to an endpoint method. ``connect`` is a more
-  ## convenient wrapper around this proc.
+proc connectLink(sim: Simulator, link: var Link, endpoint: LinkEndpoint) =
   if link.endpoint != nil:
     raise newException(SimulationError, "Link was already connected")
 
   link.sim = sim
   link.endpoint = endpoint
+
+macro connect*(sim: Simulator, link: var Link, comp: Component, endpoint: untyped): untyped =
+  ## Connect a link and an endpoint. Prefer over ``connectLink``.
+  let doconnect = bindSym"connectLink"
+  result = quote do:
+    `doconnect`(`sim`, `link`, proc (msg: Message) = `endpoint`(`comp`, msg))
 
 proc register*(sim: Simulator, comp: Component) =
   ## Register a component with the simulator. Must be called before
