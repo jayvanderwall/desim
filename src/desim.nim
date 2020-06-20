@@ -69,7 +69,13 @@ type
   Message* = ref object of RootObj
     ## Base class for messages sent over links.
 
-  Link* = object
+  BaseLink* = object of RootObj
+    ## Base class for links. Messages sent over links may or may not
+    ## be copied, so they must be treated as immutable.
+    latency: SimulationTime
+    sim: Simulator
+
+  Link* = object of BaseLink
     ## Represent a connection from one component to another. Each link
     ## is associated with a base latency. All messages sent on this
     ## link have at least that latency, but may have additional
@@ -81,9 +87,12 @@ type
     ## messages are handled by creating a ``method`` taking a
     ## ``Component`` subclass and ``Message`` subclass as its only two
     ## arguments. See `Component<#Component>`_.
-    latency: SimulationTime
-    sim: Simulator
     endpoint: LinkEndpoint
+
+  BcastLink* = object of BaseLink
+    ## Represent a connection from one component to many. For
+    ## efficicency, the message is not copied.
+    endpoints: seq[LinkEndpoint]
 
   LinkEndpoint = proc (msg: Message) {.closure.}
     ## The type of each LinkEndpoint. We use a closure to capture the
@@ -108,36 +117,6 @@ method start(comp: Component) {.base.} =
   discard
 
 #
-# Link
-#
-
-proc newLink*(latency: SimulationTime): Link =
-  ## Create a new ``Link`` with a minimum latency.
-  # The other fields are set when connected
-  return Link(latency: latency)
-
-proc send*(link: var Link, msg: Message, extraDelay=0) =
-  ## Send a message over a ``Link``. Adds any value for `extraDelay`
-  ## to the latency and uses that as the total delay for this
-  ## message. A message sent on a link does not have to wait for all
-  ## previously sent messages to arrive if their delay time is greater
-  ## than its.
-
-  if link.endpoint == nil:
-    raise newException(SimulationError, "Link was not connected")
-
-  var
-    totalLatency = link.latency + extraDelay
-    event = Event(msg: msg,
-                  time: link.sim.currentTime + totalLatency,
-                  endpoint: link.endpoint)
-  link.sim.events.push(event)
-
-proc latency*(link: Link): SimulationTime =
-  ## The minimum latency of messages sent on this link.
-  return link.latency
-
-#
 #  Simulator methods
 #
 
@@ -148,18 +127,37 @@ proc newSimulator*(quitTime: SimulationTime = 0): Simulator =
 proc currentTime*(sim: Simulator): SimulationTime =
   return sim.currentTime
 
-proc connectLink(sim: Simulator, link: var Link, endpoint: LinkEndpoint) =
+method connectLink(sim: Simulator, link: var BaseLink,
+                   endpoint: LinkEndpoint) {.base.} =
+  link.sim = sim
+
+method connectLink(sim: Simulator, link: var Link, endpoint: LinkEndpoint) =
+  procCall connectLink(sim, BaseLink(link), endpoint)
   if link.endpoint != nil:
     raise newException(SimulationError, "Link was already connected")
-
-  link.sim = sim
   link.endpoint = endpoint
 
-macro connect*(sim: Simulator, link: var Link, comp: Component, endpoint: untyped): untyped =
-  ## Connect a link and an endpoint. Prefer over ``connectLink``.
+method connectLink(sim: Simulator, link: var BcastLink,
+                   endpoint: LinkEndpoint) =
+  procCall connectLink(sim, BaseLink(link), endpoint)
+  link.endpoints.add(endpoint)
+
+macro connect*(sim: Simulator, fromComp: Component, link: untyped, toComp: Component, endpoint: untyped): untyped =
+  ## Connect a link and an endpoint.
+  # Note: This macro takes its components separately so that later we
+  # can automatically separate clusters of components by thread.
   let doconnect = bindSym"connectLink"
   result = quote do:
-    `doconnect`(`sim`, `link`, proc (msg: Message) = `endpoint`(`comp`, msg))
+    # If the user constructs this from a for-loop over the toComp,
+    # then the closure will close over the variable name, so all
+    # closures will get the last value. We avoid this by passing that
+    # as an argument to makeClosure which ensures it is copied.
+
+    # This proc may have visibility outside of this macro, and I
+    # forget how to change that.
+    proc makeClosure(c: auto): auto =
+      return proc (msg: Message) = `endpoint`(c, msg)
+    `doconnect`(`sim`, `fromComp`.`link`, makeClosure(`toComp`))
 
 proc register*(sim: Simulator, comp: Component) =
   ## Register a component with the simulator. Must be called before
@@ -181,6 +179,10 @@ proc keepGoing(sim: Simulator): bool =
   return (not sim.quitRequested and
           sim.events.len > 0 and
           (sim.quitTime == 0 or sim.quitTime >= sim.currentTime))
+
+proc addEvent(sim: Simulator, event: Event) =
+  ## Add another event to the queue
+  sim.events.push(event)
 
 proc processNextEvent(sim: Simulator) =
   ## Get the next event on the queue and proccess it.
@@ -205,3 +207,53 @@ proc quit*(sim: Simulator) =
   ## will quit once control is returned, usually at the end of the
   ## message handler currently being executed.
   sim.quitRequested = true
+
+#
+# Link
+#
+
+proc newLink*(latency: SimulationTime): Link =
+  ## Create a new ``Link`` with a minimum latency.
+  # The other fields are set when connected
+  return Link(latency: latency)
+
+proc send*(link: var Link, amsg: Message, extraDelay=0) =
+  ## Send a message over a ``Link``. Adds any value for `extraDelay`
+  ## to the latency and uses that as the total delay for this
+  ## message. A message sent on a link does not have to wait for all
+  ## previously sent messages to arrive if their delay time is greater
+  ## than its.
+
+  if link.endpoint == nil:
+    raise newException(SimulationError, "Link was not connected")
+
+  var
+    totalLatency = link.latency + extraDelay
+    event = Event(msg: amsg,
+                  time: link.sim.currentTime + totalLatency,
+                  endpoint: link.endpoint)
+  link.sim.addEvent(event)
+
+proc send*(link: var BcastLink, msg: Message, extraDelay=0) =
+  ## Send a message over a ``BcastLink``. Adds any value for
+  ## `extraDelay` to the latency and uses that as the total delay for
+  ## this message. A message sent on a link does not have to wait for
+  ## all previously sent messages to arrive if their delay time is
+  ## greater than its.
+  ##
+  ## Unlike a ``Link``, it is not an error to send to an unconnected
+  ## ``BcastLink``.
+
+  let
+    totalLatency = link.latency + extraDelay
+
+  for endpoint in link.endpoints:
+    let
+      event = Event(msg: msg,
+                    time: link.sim.currentTime + totalLatency,
+                    endpoint: endpoint)
+    link.sim.addEvent(event)
+
+proc latency*(link: Link): SimulationTime =
+  ## The minimum latency of messages sent on this link.
+  return link.latency
