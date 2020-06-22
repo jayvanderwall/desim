@@ -5,6 +5,8 @@
 import heapqueue
 import macros
 
+const noEvent = -1
+
 type
 
   SimulationTime* = int
@@ -19,52 +21,31 @@ type
     ## `components<#Component>`_.
     currentTime: SimulationTime
     components: seq[Component]
-    events: HeapQueue[Event]
+    nextEvent: SimulationTime
     quitTime: SimulationTime
     quitRequested: bool
 
-  Event = ref object
+  Event[M] = object
     ## An Event controls the flow of time and communication within the
     ## simulation. It is implicitly created by the **desim** framework.
-    msg: Message
+    msg: M
     time: SimulationTime
-    endpoint: LinkEndpoint
 
   Component* = ref object of RootObj
     ## Base class for all components, which are the basic buiding
-    ## block of the simulation. Each component automatically has a
-    ## reference to the simulator once created. This allows components
-    ## to access simulation-wide attributes like the `current
-    ## time<#currentTime,Simulator>`_.
+    ## block of the simulation
     ##
-    ## To create a new component, subclass and create a new ``start``
-    ## method.
-    ##
-    ## Example:
-    ##
-    ## .. code-block:: nim
-    ##
-    ##   type
-    ##     MyMessage = ref object of Message
-    ##       msg*: string
-    ##     MyComponent = ref object of Component
-    ##       myLink*: Link
-    ##
-    ##   proc newMyComponent*(): MyComponent =
-    ##     ## Not necessary but helps encapsulation and readability
-    ##     return MyComponent(myLink: newLink(10))
-    ##   method start*(comp: FooComponent) =
-    ##     myLink.send(MyMessage(msg: "hello, world!"))
-    ##   method receiveMessage*(comp: MyComponent, msg: Message) {.base.} =
-    ##     raise newException(system.Exception, "Unexpected message type")
-    ##   method receiveMessage*(comp: MyComponent, msg: MyMessage) =
-    ##     echo msg.msg
-    ##
-    ## All links and endpoint methods (e.g. ``receiveMessage``) must
-    ## be exported so that
-    ## `connect<#connect,Simulator,Link,LinkEndpoint>`_ works
-    ## properly. Similarly ``start`` must be exported.
-    sim*: Simulator
+    ## TODO: Explain new way of creating components
+    nextEvent: SimulationTime
+      ## When the next event will occur on this component, or noEvent if no
+      ## events are pending. Starts at zero as there is an
+      ## "initialization event" pending.
+    isStartup*: bool
+      ## This will be true on the first call of the components
+      ## runComponent method. Changing this variable has no effect.
+    isShutdown*: bool
+      ## This will be true on the last call of the components
+      ## runComponent method. Changing this variable has no effect.
 
   Message* = ref object of RootObj
     ## Base class for messages sent over links.
@@ -75,7 +56,7 @@ type
     latency: SimulationTime
     sim: Simulator
 
-  Link* = object of BaseLink
+  Link*[M] = object of BaseLink
     ## Represent a connection from one component to another. Each link
     ## is associated with a base latency. All messages sent on this
     ## link have at least that latency, but may have additional
@@ -84,19 +65,21 @@ type
     ## efficiently parallelize the components.
     ##
     ## A ``Link`` is associated with outgoing messages only. Incoming
-    ## messages are handled by creating a ``method`` taking a
-    ## ``Component`` subclass and ``Message`` subclass as its only two
-    ## arguments. See `Component<#Component>`_.
-    endpoint: LinkEndpoint
+    ## messages are handled by the ``Port`` type.
+    port: Port[M]
 
-  BcastLink* = object of BaseLink
+  BcastLink*[M] = object of BaseLink
     ## Represent a connection from one component to many. For
-    ## efficicency, the message is not copied.
-    endpoints: seq[LinkEndpoint]
+    ## efficicency, the message is not necessarily copied.
+    ports: seq[Port[M]]
 
-  LinkEndpoint = proc (msg: Message) {.closure.}
-    ## The type of each LinkEndpoint. We use a closure to capture the
-    ## ``Component`` and endpoint method are combined in one object.
+  PortObj[M] = object
+    ## Endpoint for messages of type ``M``.
+    events: HeapQueue[Event[M]]
+    comp {.cursor.}: Component
+    sim {.cursor.}: Simulator
+
+  Port*[M] = ref PortObj[M]
 
   SimulationError* = object of CatchableError
     ## Base exception for all exceptions raised by the simulation.
@@ -105,15 +88,30 @@ type
 # Event
 #
 
-proc `<`(e0, e1: Event): bool =
+proc `<`*[M](e0, e1: Event[M]): bool =
   e0.time < e1.time
 
 #
 # Component
 #
 
-# Base method for component's initialization methods
-method start(comp: Component) {.base.} =
+proc updateNextEvent(comp: Component, nextEvent: SimulationTime) =
+  ## Update the next event timer to be the sooner of the current timer
+  ## or the input argument.
+  if comp.nextEvent == noEvent:
+    comp.nextEvent = nextEvent
+  else:
+    comp.nextEvent = min(comp.nextEvent, nextEvent)
+
+proc resetNextEvent(comp: Component) =
+  ## Set the state of the component to be such that there are no
+  ## events pending.
+  comp.nextEvent = noEvent
+
+method runComponent*(comp: Component, sim: Simulator, isStartup = false, isShutdown = false) {.base.} =
+  ## Base method for the implementations of each component. This is
+  ## run once at component startup, whenever new messages arrive, and
+  ## once again at component shutdown.
   discard
 
 #
@@ -121,86 +119,67 @@ method start(comp: Component) {.base.} =
 #
 
 proc newSimulator*(quitTime: SimulationTime = 0): Simulator =
-  return Simulator(components: @[], events: initHeapQueue[Event](),
-                   quitTime: quitTime)
+  return Simulator(quitTime: quitTime)
 
 proc currentTime*(sim: Simulator): SimulationTime =
   return sim.currentTime
 
-method connectLink(sim: Simulator, link: var BaseLink,
-                   endpoint: LinkEndpoint) {.base.} =
+proc updateNextEvent(sim: Simulator, nextEvent: SimulationTime) =
+  if sim.nextEvent == noEvent:
+    sim.nextEvent = nextEvent
+  else:
+    sim.nextEvent = min(sim.nextEvent, nextEvent)
+
+proc resetNextEvent(sim: Simulator) =
+  sim.nextEvent = noEvent
+
+proc connect*[M](sim: Simulator, fromComp: Component, link: var Link[M], toComp: Component, port: var Port[M]) =
+  ## Connect a link and a port.
+  link.port = port
   link.sim = sim
-
-method connectLink(sim: Simulator, link: var Link, endpoint: LinkEndpoint) =
-  procCall connectLink(sim, BaseLink(link), endpoint)
-  if link.endpoint != nil:
-    raise newException(SimulationError, "Link was already connected")
-  link.endpoint = endpoint
-
-method connectLink(sim: Simulator, link: var BcastLink,
-                   endpoint: LinkEndpoint) =
-  procCall connectLink(sim, BaseLink(link), endpoint)
-  link.endpoints.add(endpoint)
-
-macro connect*(sim: Simulator, fromComp: Component, link: untyped, toComp: Component, endpoint: untyped): untyped =
-  ## Connect a link and an endpoint.
-  # Note: This macro takes its components separately so that later we
-  # can automatically separate clusters of components by thread.
-  let doconnect = bindSym"connectLink"
-  result = quote do:
-    # If the user constructs this from a for-loop over the toComp,
-    # then the closure will close over the variable name, so all
-    # closures will get the last value. We avoid this by passing that
-    # as an argument to makeClosure which ensures it is copied.
-
-    # This proc may have visibility outside of this macro, and I
-    # forget how to change that.
-    proc makeClosure(c: auto): auto =
-      return proc (msg: Message) = `endpoint`(c, msg)
-    `doconnect`(`sim`, `fromComp`.`link`, makeClosure(`toComp`))
+  port.sim = sim
+  port.comp = toComp
 
 proc register*(sim: Simulator, comp: Component) =
   ## Register a component with the simulator. Must be called before
   ## ``run``.
 
-  if comp.sim != nil:
-    raise newException(SimulationError, "Component already registered")
-
-  comp.sim = sim
-  sim.components.add(comp)
-
-proc advanceTime(sim: Simulator) =
-  ## Advance time based on the next event to occur
-  if sim.events.len != 0:
-    sim.currentTime = sim.events[0].time
+  sim.components.add comp
 
 proc keepGoing(sim: Simulator): bool =
   ## Return whether to continue processing events.
   return (not sim.quitRequested and
-          sim.events.len > 0 and
+          sim.nextEvent != noEvent and
           (sim.quitTime == 0 or sim.quitTime >= sim.currentTime))
-
-proc addEvent(sim: Simulator, event: Event) =
-  ## Add another event to the queue
-  sim.events.push(event)
-
-proc processNextEvent(sim: Simulator) =
-  ## Get the next event on the queue and proccess it.
-  let event = sim.events.pop
-  event.endpoint(event.msg)
 
 proc run*(sim: Simulator) =
   ## Run the simulation until no more messages remain or another
   ## termination condition is met.
 
-  for comp in sim.components:
-    start(comp)
+  sim.resetNextEvent
 
-  sim.advanceTime
+  # Initialize each component
+  for comp in sim.components:
+    comp.resetNextEvent
+    comp.runComponent(sim, isStartup=true)
 
   while sim.keepGoing:
-    sim.processNextEvent
-    sim.advanceTime
+    sim.currentTime = sim.nextEvent
+    var nextEvent = noEvent
+    for comp in sim.components:
+      assert comp.nextEvent == noEvent or comp.nextEvent >= sim.currentTime
+      if comp.nextEvent == sim.currentTime:
+        comp.runComponent sim
+        # runComponent is expected to handle all events, so we set its
+        # nextEvent counter to noEvent
+        comp.resetNextEvent
+      elif nextEvent == noEvent or comp.nextEvent < nextEvent:
+        nextEvent = comp.nextEvent
+    sim.nextEvent = nextEvent
+
+  # Finalize each component
+  for comp in sim.components:
+    comp.runComponent(sim, isShutdown=true)
 
 proc quit*(sim: Simulator) =
   ## Tell the simulator to stop processing new messages. The simulator
@@ -209,30 +188,51 @@ proc quit*(sim: Simulator) =
   sim.quitRequested = true
 
 #
+# Port
+#
+
+proc newPort*[M](): Port[M] =
+  return Port[M]()
+
+proc addEvent[M](port: var Port[M], event: sink Event[M]) =
+  ## Add this event to the pending list for the port, and update the
+  ## next event timers for the containing component and the simulator.
+  
+  port.comp.updateNextEvent event.time
+  port.sim.updateNextEvent event.time
+  port.events.push event
+
+proc hasMessage*[M](port: PortObj[M]): bool =
+  return port.events.len != 0
+
+proc getMessage*[M](port: Port[M]): M =
+  return port.events.pop().msg
+
+#
 # Link
 #
 
-proc newLink*(latency: SimulationTime): Link =
+proc newLink*[M](latency: SimulationTime): Link[M] =
   ## Create a new ``Link`` with a minimum latency.
   # The other fields are set when connected
-  return Link(latency: latency)
+  return Link[M](latency: latency)
 
-proc send*(link: var Link, amsg: Message, extraDelay=0) =
+proc send*[M](link: var Link[M], amsg: M, extraDelay=0) =
   ## Send a message over a ``Link``. Adds any value for `extraDelay`
   ## to the latency and uses that as the total delay for this
   ## message. A message sent on a link does not have to wait for all
   ## previously sent messages to arrive if their delay time is greater
-  ## than its.
+  ## than its is.
 
-  if link.endpoint == nil:
+  if link.port == nil:
     raise newException(SimulationError, "Link was not connected")
 
   var
     totalLatency = link.latency + extraDelay
-    event = Event(msg: amsg,
-                  time: link.sim.currentTime + totalLatency,
-                  endpoint: link.endpoint)
-  link.sim.addEvent(event)
+    event = Event[M](msg: amsg,
+                     time: link.sim.currentTime + totalLatency)
+
+  link.port.addEvent event
 
 proc send*(link: var BcastLink, msg: Message, extraDelay=0) =
   ## Send a message over a ``BcastLink``. Adds any value for
@@ -244,15 +244,7 @@ proc send*(link: var BcastLink, msg: Message, extraDelay=0) =
   ## Unlike a ``Link``, it is not an error to send to an unconnected
   ## ``BcastLink``.
 
-  let
-    totalLatency = link.latency + extraDelay
-
-  for endpoint in link.endpoints:
-    let
-      event = Event(msg: msg,
-                    time: link.sim.currentTime + totalLatency,
-                    endpoint: endpoint)
-    link.sim.addEvent(event)
+  # TODO
 
 proc latency*(link: Link): SimulationTime =
   ## The minimum latency of messages sent on this link.
