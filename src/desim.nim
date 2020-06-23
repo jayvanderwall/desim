@@ -40,12 +40,6 @@ type
       ## When the next event will occur on this component, or noEvent if no
       ## events are pending. Starts at zero as there is an
       ## "initialization event" pending.
-    isStartup*: bool
-      ## This will be true on the first call of the components
-      ## runComponent method. Changing this variable has no effect.
-    isShutdown*: bool
-      ## This will be true on the last call of the components
-      ## runComponent method. Changing this variable has no effect.
 
   Message* = ref object of RootObj
     ## Base class for messages sent over links.
@@ -113,6 +107,34 @@ method runComponent*(comp: Component, sim: Simulator, isStartup = false, isShutd
   ## run once at component startup, whenever new messages arrive, and
   ## once again at component shutdown.
   discard
+
+macro component*(comp: untyped, ComponentType: untyped, body: untyped): untyped =
+  ## Define a component's behavior.
+  ##
+  ## This macro introduces several other templates locally for
+  ## different actions. The ``shutdown`` template takes no arguments
+  ## and is run once when the node is cleanly shutdown. The ``startup
+  let
+    shutdown = genSym(kind=nskTemplate, ident="shutdown")
+    startup = genSym(kind=nskTemplate, ident="startup")
+    # We have to make sure these aren't genSym'd
+    isShutdown = ident("isShutdown")
+    isStartup = ident("isStartup")
+  result = quote do:
+    template `shutdown`(shutdownBody: untyped): untyped {.dirty.} =
+      if `isShutdown`:
+        shutdownBody
+        return
+    template `startup`(startupBody: untyped): untyped {.dirty.} =
+      if `isStartup`:
+        startupBody
+    template onMessage(port: untyped, msgName: untyped, onMessageBody: untyped): untyped {.dirty.} =
+      while not `isShutdown` and `comp`.port[].hasMessage:
+        let msgName = `comp`.port.getMessage
+        onMessageBody
+    method runComponent*(`comp`: `ComponentType`, sim: Simulator, `isStartup` = false, `isShutdown` = false) =
+      `body`
+  echo result.repr
 
 #
 #  Simulator methods
