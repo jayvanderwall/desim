@@ -5,14 +5,18 @@ import desim
 type
   TestSelfComponent = ref object of Component
     counter: int
-    selfLink: Link
+    selfLink: Link[bool]
+    selfPort: Port[bool]
 
-method receiveSelf(comp: TestSelfComponent, msg: Message) {.base.} =
-  comp.counter += 1
+component comp, TestSelfComponent:
+  useSimulator sim
 
-method start(comp: TestSelfComponent) =
-  comp.sim.connect(comp, selfLink, comp, receiveSelf)
-  comp.selfLink.send(Message())
+  startup:
+    sim.connect(comp, comp.selfLink, comp, comp.selfPort)
+    comp.selfLink.send(true)
+
+  onMessage selfPort, msg:
+    comp.counter += 1
 
 proc makeTestSim(components: seq[Component]): Simulator =
   result = newSimulator()
@@ -22,7 +26,8 @@ proc makeTestSim(components: seq[Component]): Simulator =
 test "Component with self loop":
 
   let
-    testComp = TestSelfComponent()
+    testComp = TestSelfComponent(selfPort: Port[bool]())
+
   var
     components: seq[Component]
   components.add(testComp)
@@ -38,26 +43,21 @@ type
 
   TestRecvComponent = ref object of Component
     msg: int
+    recvPort: Port[int]
 
-  TestMessage = ref object of Message
-    msg: int
+component comp, TestSendComponent[Link[int]]:
+  startup:
+    comp.sendLink.send(comp.msg)
 
-method receiveMessage(comp: TestRecvComponent, msg: Message) {.base.} =
-  raise newException(Exception, "Bad message")
+component comp, TestRecvComponent:
 
-method receiveMessage(comp: TestRecvComponent, msg: TestMessage) =
-  comp.msg = msg.msg
-
-method start(comp: TestSendComponent[Link]) =
-  comp.sendLink.send(TestMessage(msg: comp.msg))
-
-method start(comp: TestSendComponent[BcastLink]) =
-  comp.sendLink.send(TestMessage(msg: comp.msg))
+  onMessage recvPort, msg:
+    comp.msg = msg
 
 test "Two Components communicating":
   let
-    sendComp = TestSendComponent[Link](msg: 42)
-    recvComp = TestRecvComponent(msg: 0)
+    sendComp = TestSendComponent[Link[int]](msg: 42)
+    recvComp = TestRecvComponent(msg: 0, recvPort: Port[int]())
 
   var components: seq[Component]
 
@@ -66,12 +66,13 @@ test "Two Components communicating":
 
   var sim = makeTestSim(components)
 
-  sim.connect(sendComp, sendLink, recvComp, receiveMessage)
+  sim.connect(sendComp, sendComp.sendLink, recvComp, recvComp.recvPort)
 
   sim.run()
 
   check(recvComp.msg == sendComp.msg)
 
+#[
 test "Broadcast to two components":
   let
     sender = TestSendComponent[BcastLink](msg: 42)
@@ -96,3 +97,4 @@ test "Broadcast to two components":
 
   for idx, receiver in receivers:
     check(receiver.msg == sender.msg)
+]#

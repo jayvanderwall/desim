@@ -121,7 +121,7 @@ macro component*(comp: untyped, ComponentType: untyped, body: untyped): untyped 
   ## iterates over them.
   ##
   ## Example:
-  ##
+  ## ```nim
   ## component comp, MyComponent:
   ##   startup:
   ##     comp.myLink.send newMsg("hello")
@@ -129,26 +129,33 @@ macro component*(comp: untyped, ComponentType: untyped, body: untyped): untyped 
   ##     log.info("Shutting down")
   ##   onMessage myPort, msg:
   ##     log.info("Received message", msg.msg)
+  ## ```
 
   let
     shutdown = genSym(kind=nskTemplate, ident="shutdown")
     startup = genSym(kind=nskTemplate, ident="startup")
+    simulatorSym = genSym(kind=nskParam, ident="simulator")
     # We have to make sure these aren't genSym'd
     isShutdown = ident("isShutdown")
     isStartup = ident("isStartup")
   result = quote do:
-    template `shutdown`(shutdownBody: untyped): untyped {.dirty.} =
-      if `isShutdown`:
-        shutdownBody
-    template `startup`(startupBody: untyped): untyped {.dirty.} =
-      if `isStartup`:
-        startupBody
-    template onMessage(port: untyped, msgName: untyped, onMessageBody: untyped): untyped {.dirty.} =
-      while not `isShutdown` and not `isStartup` and `comp`.port[].hasMessage:
-        let msgName = `comp`.port.getMessage
-        onMessageBody
-    method runComponent*(`comp`: `ComponentType`, sim: Simulator, `isStartup` = false, `isShutdown` = false) =
+    {.push hint[XDeclaredButNotUsed]:off.}
+    method runComponent*(`comp`: `ComponentType`, `simulatorSym`: Simulator, `isStartup` = false, `isShutdown` = false) =
+      template `shutdown`(shutdownBody: untyped): untyped {.dirty.} =
+        if `isShutdown`:
+          shutdownBody
+      template `startup`(startupBody: untyped): untyped {.dirty.} =
+        if `isStartup`:
+          startupBody
+      template onMessage(port: untyped, msgName: untyped, onMessageBody: untyped): untyped {.dirty.} =
+        while not `isShutdown` and not `isStartup` and `comp`.port[].hasMessage:
+          let msgName = `comp`.port.getMessage
+          onMessageBody
+      template useSimulator(name: untyped): untyped {.dirty.} =
+        var name = `simulatorSym`
       `body`
+    {.pop.}
+
 
 #
 #  Simulator methods
@@ -197,6 +204,7 @@ proc run*(sim: Simulator) =
   # Initialize each component
   for comp in sim.components:
     comp.resetNextEvent
+  for comp in sim.components:
     comp.runComponent(sim, isStartup=true)
 
   while sim.keepGoing:
