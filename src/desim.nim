@@ -1,11 +1,8 @@
 ## Core data types for the **desim** package
 ##
-## Remember to compile with ``--multimethods:on``
 
 import heapqueue
 import macros
-
-const noEvent = -1
 
 type
 
@@ -35,7 +32,8 @@ type
     ## Base class for all components, which are the basic buiding
     ## block of the simulation
     ##
-    ## TODO: Explain new way of creating components
+    ## Create a component with links and ports as fields. Then define
+    ## its functionality using the ``component`` macro.
     nextEvent: SimulationTime
       ## When the next event will occur on this component, or noEvent if no
       ## events are pending. Starts at zero as there is an
@@ -78,6 +76,8 @@ type
   SimulationError* = object of CatchableError
     ## Base exception for all exceptions raised by the simulation.
 
+const noEvent = SimulationTime(-1)
+
 #
 # Event
 #
@@ -86,21 +86,24 @@ proc `<`*[M](e0, e1: Event[M]): bool =
   e0.time < e1.time
 
 #
+# SimulationTime
+#
+
+proc update*(t0, t1: SimulationTime): SimulationTime =
+  if t0 == noEvent:
+    return t1
+  if t1 == noEvent:
+    return t1
+  return min(int(t0), int(t1))
+
+#
 # Component
 #
 
 proc updateNextEvent(comp: Component, nextEvent: SimulationTime) =
   ## Update the next event timer to be the sooner of the current timer
   ## or the input argument.
-  if comp.nextEvent == noEvent:
-    comp.nextEvent = nextEvent
-  else:
-    comp.nextEvent = min(comp.nextEvent, nextEvent)
-
-proc resetNextEvent(comp: Component) =
-  ## Set the state of the component to be such that there are no
-  ## events pending.
-  comp.nextEvent = noEvent
+  comp.nextEvent = update(comp.nextEvent, nextEvent)
 
 method runComponent*(comp: Component, sim: Simulator, isStartup = false, isShutdown = false) {.base.} =
   ## Base method for the implementations of each component. This is
@@ -118,15 +121,18 @@ macro component*(comp: untyped, ComponentType: untyped, body: untyped): untyped 
   ## and is run once when the node is cleanly shutdown. The
   ## ``startup`` template is similar and runs on startup. The
   ## ``onMessage`` macro takes a port and a name for the messages and
-  ## iterates over them.
+  ## iterates over them. ``useSimulator`` can be used to declare a
+  ## name by which you will refer to the simulator object in the rest
+  ## of the component definition.
   ##
   ## Example:
   ## ```nim
   ## component comp, MyComponent:
+  ##   useSimulator sim
   ##   startup:
   ##     comp.myLink.send newMsg("hello")
   ##   shutdown:
-  ##     log.info("Shutting down")
+  ##     log.info("Shutting down", sim.currentTime)
   ##   onMessage myPort, msg:
   ##     log.info("Received message", msg.msg)
   ## ```
@@ -135,6 +141,7 @@ macro component*(comp: untyped, ComponentType: untyped, body: untyped): untyped 
     shutdown = genSym(kind=nskTemplate, ident="shutdown")
     startup = genSym(kind=nskTemplate, ident="startup")
     simulatorSym = genSym(kind=nskParam, ident="simulator")
+    simTime = genSym(kind=nskLet, ident="simTime")
     # We have to make sure these aren't genSym'd
     isShutdown = ident("isShutdown")
     isStartup = ident("isStartup")
@@ -148,30 +155,30 @@ macro component*(comp: untyped, ComponentType: untyped, body: untyped): untyped 
         if `isStartup`:
           startupBody
       template onMessage(port: untyped, msgName: untyped, onMessageBody: untyped): untyped {.dirty.} =
-        while not `isShutdown` and not `isStartup` and `comp`.port[].hasMessage:
-          let msgName = `comp`.port.getMessage
-          onMessageBody
+        if not `isShutdown` and not `isStartup`:
+          for msgName in `comp`.port.messages `simTime`:
+            onMessageBody
+        `comp`.nextEvent = update(`comp`.nextEvent, `comp`.port.nextEventTime)
       template useSimulator(name: untyped): untyped {.dirty.} =
         var name = `simulatorSym`
+
+      `comp`.nextEvent = noEvent
+      let `simTime` = `simulatorSym`.currentTime
       `body`
     {.pop.}
-
 
 #
 #  Simulator methods
 #
 
-proc newSimulator*(quitTime: SimulationTime = 0): Simulator =
+proc newSimulator*(quitTime = SimulationTime(0)): Simulator =
   return Simulator(quitTime: quitTime)
 
 proc currentTime*(sim: Simulator): SimulationTime =
   return sim.currentTime
 
 proc updateNextEvent(sim: Simulator, nextEvent: SimulationTime) =
-  if sim.nextEvent == noEvent:
-    sim.nextEvent = nextEvent
-  else:
-    sim.nextEvent = min(sim.nextEvent, nextEvent)
+  sim.nextEvent = update(sim.nextEvent, nextEvent)
 
 proc resetNextEvent(sim: Simulator) =
   sim.nextEvent = noEvent
@@ -201,9 +208,9 @@ proc run*(sim: Simulator) =
 
   sim.resetNextEvent
 
+  # TODO: Make onMessage an iterator macro.
+
   # Initialize each component
-  for comp in sim.components:
-    comp.resetNextEvent
   for comp in sim.components:
     comp.runComponent(sim, isStartup=true)
 
@@ -214,9 +221,6 @@ proc run*(sim: Simulator) =
       assert comp.nextEvent == noEvent or comp.nextEvent >= sim.currentTime
       if comp.nextEvent == sim.currentTime:
         comp.runComponent sim
-        # runComponent is expected to handle all events, so we set its
-        # nextEvent counter to noEvent
-        comp.resetNextEvent
       elif nextEvent == noEvent or comp.nextEvent < nextEvent:
         nextEvent = comp.nextEvent
     sim.nextEvent = nextEvent
@@ -246,11 +250,22 @@ proc addEvent[M](port: var Port[M], event: sink Event[M]) =
   port.sim.updateNextEvent event.time
   port.events.push event
 
-proc hasMessage*[M](port: PortObj[M]): bool =
-  return port.events.len != 0
+proc nextEventTime*[M](port: Port[M]): SimulationTime =
+  ## Return the earliest event time of all events pending on this
+  ## port.
+  if len(port.events) == 0:
+    return noEvent
+  else:
+    return port.events[0].time
 
-proc getMessage*[M](port: Port[M]): M =
-  return port.events.pop().msg
+iterator messages*[M](port: Port[M], time: SimulationTime): M =
+  ## Iterate over all message in this port that happen at this time
+  ## step. It is a serious programmatic error if any events are
+  ## pending on this port that have a timestamp before the given time.
+  while port.events.len() != 0:
+    assert port.events[0].time >= time
+    if port.events[0].time == time:
+      yield port.events.pop().msg
 
 #
 # Link

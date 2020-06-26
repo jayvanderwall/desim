@@ -50,9 +50,10 @@ component comp, TestSendComponent[Link[int]]:
     comp.sendLink.send(comp.msg)
 
 component comp, TestRecvComponent:
-
+  echo "In TestRecvComponent"
   onMessage recvPort, msg:
     comp.msg = msg
+  echo "Done TestRecvComponent"
 
 test "Two Components communicating":
   let
