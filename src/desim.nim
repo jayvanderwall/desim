@@ -220,8 +220,7 @@ proc run*(sim: Simulator) =
       assert comp.nextEvent == noEvent or comp.nextEvent >= sim.currentTime
       if comp.nextEvent == sim.currentTime:
         comp.runComponent sim
-      elif nextEvent == noEvent or comp.nextEvent < nextEvent:
-        nextEvent = comp.nextEvent
+      nextEvent = update(nextEvent, comp.nextEvent)
     sim.nextEvent = nextEvent
 
   # Finalize each component
@@ -261,10 +260,9 @@ iterator messages*[M](port: Port[M], time: SimulationTime): M =
   ## Iterate over all message in this port that happen at this time
   ## step. It is a serious programmatic error if any events are
   ## pending on this port that have a timestamp before the given time.
-  while port.events.len() != 0:
-    assert port.events[0].time >= time
-    if port.events[0].time == time:
-      yield port.events.pop().msg
+  assert port.events[0].time >= time
+  while port.events.len() != 0 and port.events[0].time == time:
+    yield port.events.pop().msg
 
 #
 # Link

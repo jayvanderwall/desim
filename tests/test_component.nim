@@ -3,6 +3,10 @@ import unittest
 import desim
 import sequtils
 
+#
+# Component with self loop
+#
+
 type
   TestSelfComponent = ref object of Component
     counter: int
@@ -46,6 +50,10 @@ type
     msg: int
     recvPort: Port[int]
 
+#
+# Two components communicating
+#
+
 component comp, TestSendComponent[Link[int]]:
   startup:
     comp.sendLink.send(comp.msg)
@@ -72,6 +80,10 @@ test "Two Components communicating":
 
   check(recvComp.msg == sendComp.msg)
 
+#
+# Multiple messages with delays
+#
+
 type
   MultiMessageSend = ref object of Component
     msgs: seq[(int, SimulationTime)]
@@ -89,7 +101,7 @@ component comp, MultiMessageSend:
 component comp, MultiMessageRecv:
   useSimulator sim
   onMessage recvPort, msg:
-    echo "Got message ", msg
+    echo "Got message ", msg, " at time ", sim.currentTime
     comp.msgs.add (msg, sim.currentTime)
 
 test "Multiple messages different delays":
