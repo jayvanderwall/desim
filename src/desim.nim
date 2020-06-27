@@ -46,7 +46,7 @@ type
     ## Base class for links. Messages sent over links may or may not
     ## be copied, so they must be treated as immutable.
     latency: SimulationTime
-    sim: Simulator
+    sim {.cursor.}: Simulator
 
   Link*[M] = object of BaseLink
     ## Represent a connection from one component to another. Each link
