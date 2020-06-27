@@ -101,7 +101,6 @@ component comp, MultiMessageSend:
 component comp, MultiMessageRecv:
   useSimulator sim
   onMessage recvPort, msg:
-    echo "Got message ", msg, " at time ", sim.currentTime
     comp.msgs.add (msg, sim.currentTime)
 
 test "Multiple messages different delays":
@@ -121,13 +120,20 @@ test "Multiple messages different delays":
   for (smsg, rmsg) in zip(sender.msgs, receiver.msgs):
     check(smsg == rmsg)
 
-#[
+#
+# Broadcast to component
+#
+
+component comp, TestSendComponent[BcastLink[int]]:
+  startup:
+    comp.sendLink.send(comp.msg)
+
 test "Broadcast to two components":
   let
-    sender = TestSendComponent[BcastLink](msg: 42)
+    sender = TestSendComponent[BcastLink[int]](msg: 42, sendLink: newBcastLink[int](0))
     receivers = [
-      TestRecvComponent(msg: 0),
-      TestRecvComponent(msg: 0)
+      TestRecvComponent(msg: 0, recvPort: newPort[int]()),
+      TestRecvComponent(msg: 0, recvPort: newPort[int]())
     ]
 
   var components: seq[Component]
@@ -140,10 +146,9 @@ test "Broadcast to two components":
     sim = makeTestSim(components)
 
   for receiver in receivers:
-    sim.connect(sender, sendLink, receiver, receiveMessage)
+    sim.connect(sender, sender.sendLink, receiver, receiver.recvPort)
 
   sim.run()
 
   for idx, receiver in receivers:
     check(receiver.msg == sender.msg)
-]#

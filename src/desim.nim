@@ -182,10 +182,13 @@ proc updateNextEvent(sim: Simulator, nextEvent: SimulationTime) =
 proc resetNextEvent(sim: Simulator) =
   sim.nextEvent = noEvent
 
-proc connect*[M](sim: Simulator, fromComp: Component, link: var Link[M], toComp: Component, port: var Port[M]) =
+# Forward definitions
+proc connect[M](link: var Link[M], port: Port[M], sim: Simulator)
+proc connect[M](link: var BcastLink[M], port: Port[M], sim: Simulator)
+
+template connect*[M](sim: Simulator, fromComp: Component, link: typed, toComp: Component, port: var Port[M]) =
   ## Connect a link and a port.
-  link.port = port
-  link.sim = sim
+  link.connect port, sim
   port.sim = sim
   port.comp = toComp
 
@@ -206,8 +209,6 @@ proc run*(sim: Simulator) =
   ## termination condition is met.
 
   sim.resetNextEvent
-
-  # TODO: Make onMessage an iterator macro.
 
   # Initialize each component
   for comp in sim.components:
@@ -243,7 +244,7 @@ proc newPort*[M](): Port[M] =
 proc addEvent[M](port: var Port[M], event: sink Event[M]) =
   ## Add this event to the pending list for the port, and update the
   ## next event timers for the containing component and the simulator.
-  
+
   port.comp.updateNextEvent event.time
   port.sim.updateNextEvent event.time
   port.events.push event
@@ -265,6 +266,17 @@ iterator messages*[M](port: Port[M], time: SimulationTime): M =
     yield port.events.pop().msg
 
 #
+# BaseLink
+#
+
+proc connect[M](link: var BaseLink, port: Port[M], sim: Simulator) =
+  link.sim = sim
+
+proc latency*(link: BaseLink): SimulationTime =
+  ## The minimum latency of messages sent on this link.
+  return link.latency
+
+#
 # Link
 #
 
@@ -273,7 +285,7 @@ proc newLink*[M](latency: SimulationTime): Link[M] =
   # The other fields are set when connected
   return Link[M](latency: latency)
 
-proc send*[M](link: var Link[M], amsg: M, extraDelay=0) =
+proc send*[M](link: var Link[M], msg: M, extraDelay=0) =
   ## Send a message over a ``Link``. Adds any value for `extraDelay`
   ## to the latency and uses that as the total delay for this
   ## message. A message sent on a link does not have to wait for all
@@ -283,14 +295,27 @@ proc send*[M](link: var Link[M], amsg: M, extraDelay=0) =
   if link.port == nil:
     raise newException(SimulationError, "Link was not connected")
 
-  var
+  let
     totalLatency = link.latency + extraDelay
-    event = Event[M](msg: amsg,
+    event = Event[M](msg: msg,
                      time: link.sim.currentTime + totalLatency)
 
   link.port.addEvent event
 
-proc send*(link: var BcastLink, msg: Message, extraDelay=0) =
+proc connect[M](link: var Link[M], port: Port[M], sim: Simulator) =
+  connect BaseLink(link), port, sim
+  link.port = port
+
+#
+# BcastLink
+#
+
+proc newBcastLink*[M](latency: SimulationTime): BcastLink[M] =
+  ## Create a new ``BcastLink`` with a minimum latency.
+  # The other fields are set when connected
+  return BcastLink[M](latency: latency)
+
+proc send*[M](link: var BcastLink[M], msg: M, extraDelay=0) =
   ## Send a message over a ``BcastLink``. Adds any value for
   ## `extraDelay` to the latency and uses that as the total delay for
   ## this message. A message sent on a link does not have to wait for
@@ -300,8 +325,19 @@ proc send*(link: var BcastLink, msg: Message, extraDelay=0) =
   ## Unlike a ``Link``, it is not an error to send to an unconnected
   ## ``BcastLink``.
 
-  # TODO
+  if link.sim == nil:
+    # This means no connections were made
+    return
 
-proc latency*(link: Link): SimulationTime =
-  ## The minimum latency of messages sent on this link.
-  return link.latency
+  let
+    totalLatency = link.latency + extraDelay
+    event = Event[M](msg: msg,
+                     time: link.sim.currentTime + totalLatency)
+
+  for port in mitems(link.ports):
+    port.addEvent event
+
+proc connect[M](link: var BcastLink[M], port: Port[M], sim: Simulator) =
+  connect BaseLink(link), port, sim
+  link.ports.add port
+
