@@ -142,9 +142,8 @@ macro component*(comp: untyped, ComponentType: untyped, body: untyped): untyped 
     startup = genSym(kind=nskTemplate, ident="startup")
     simulatorSym = genSym(kind=nskParam, ident="simulator")
     simTime = genSym(kind=nskLet, ident="simTime")
-    # We have to make sure these aren't genSym'd
-    isShutdown = ident("isShutdown")
-    isStartup = ident("isStartup")
+    isShutdown = genSym(kind=nskParam, "isShutdown")
+    isStartup = genSym(kind=nskParam, "isStartup")
   result = quote do:
     {.push hint[XDeclaredButNotUsed]:off.}
     method runComponent*(`comp`: `ComponentType`, `simulatorSym`: Simulator, `isStartup` = false, `isShutdown` = false) =

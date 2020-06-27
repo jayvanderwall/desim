@@ -1,6 +1,7 @@
 import unittest
 
 import desim
+import sequtils
 
 type
   TestSelfComponent = ref object of Component
@@ -50,10 +51,8 @@ component comp, TestSendComponent[Link[int]]:
     comp.sendLink.send(comp.msg)
 
 component comp, TestRecvComponent:
-  echo "In TestRecvComponent"
   onMessage recvPort, msg:
     comp.msg = msg
-  echo "Done TestRecvComponent"
 
 test "Two Components communicating":
   let
@@ -72,6 +71,43 @@ test "Two Components communicating":
   sim.run()
 
   check(recvComp.msg == sendComp.msg)
+
+type
+  MultiMessageSend = ref object of Component
+    msgs: seq[(int, SimulationTime)]
+    sendLink: Link[int]
+
+  MultiMessageRecv = ref object of Component
+    msgs: seq[(int, SimulationTime)]
+    recvPort: Port[int]
+
+component comp, MultiMessageSend:
+  startup:
+    for msg in comp.msgs:
+      comp.sendLink.send(msg[0], msg[1])
+
+component comp, MultiMessageRecv:
+  useSimulator sim
+  onMessage recvPort, msg:
+    echo "Got message ", msg
+    comp.msgs.add (msg, sim.currentTime)
+
+test "Multiple messages different delays":
+  let
+    sender = MultiMessageSend(
+      msgs: @[(1, 0), (2, 5), (3, 25)],
+      sendLink: newLink[int](0)
+    )
+    receiver = MultiMessageRecv(recvPort: newPort[int]())
+
+  var sim = makeTestSim(@[sender, receiver])
+
+  sim.connect(sender, sender.sendLink, receiver, receiver.recvPort)
+
+  sim.run()
+
+  for (smsg, rmsg) in zip(sender.msgs, receiver.msgs):
+    check(smsg == rmsg)
 
 #[
 test "Broadcast to two components":
