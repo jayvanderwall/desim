@@ -20,7 +20,7 @@ component comp, TestSelfComponent:
     sim.connect(comp, comp.selfLink, comp, comp.selfPort)
     comp.selfLink.send(true)
 
-  onMessage selfPort, msg:
+  onMessage comp.selfPort, msg:
     comp.counter += 1
 
 proc makeTestSim(components: seq[Component]): Simulator =
@@ -59,7 +59,7 @@ component comp, TestSendComponent[Link[int]]:
     comp.sendLink.send(comp.msg)
 
 component comp, TestRecvComponent:
-  onMessage recvPort, msg:
+  onMessage comp.recvPort, msg:
     comp.msg = msg
 
 test "Two Components communicating":
@@ -100,7 +100,7 @@ component comp, MultiMessageSend:
 
 component comp, MultiMessageRecv:
   useSimulator sim
-  onMessage recvPort, msg:
+  onMessage comp.recvPort, msg:
     comp.msgs.add (msg, sim.currentTime)
 
 test "Multiple messages different delays":

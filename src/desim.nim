@@ -36,8 +36,7 @@ type
     ## its functionality using the ``component`` macro.
     nextEvent: SimulationTime
       ## When the next event will occur on this component, or noEvent if no
-      ## events are pending. Starts at zero as there is an
-      ## "initialization event" pending.
+      ## events are pending.
 
   Message* = ref object of RootObj
     ## Base class for messages sent over links.
@@ -153,11 +152,11 @@ macro component*(comp: untyped, ComponentType: untyped, body: untyped): untyped 
       template `startup`(startupBody: untyped): untyped {.dirty.} =
         if `isStartup`:
           startupBody
-      template onMessage(port: untyped, msgName: untyped, onMessageBody: untyped): untyped {.dirty.} =
+      template onMessage(port: typed, msgName: untyped, onMessageBody: untyped): untyped {.dirty.} =
         if not `isShutdown` and not `isStartup`:
-          for msgName in `comp`.port.messages `simTime`:
+          for msgName in port.messages `simTime`:
             onMessageBody
-        `comp`.nextEvent = update(`comp`.nextEvent, `comp`.port.nextEventTime)
+        `comp`.nextEvent = update(`comp`.nextEvent, port.nextEventTime)
       template useSimulator(name: untyped): untyped {.dirty.} =
         var name = `simulatorSym`
 
