@@ -17,8 +17,8 @@ type
     ## create this and use it to `register<#register>`_ other
     ## `components<#Component>`_.
     currentTime: SimulationTime
-    components: seq[Component]
     nextEvent: SimulationTime
+    components: seq[Component]
     quitTime: SimulationTime
     quitRequested: bool
 
@@ -66,7 +66,7 @@ type
 
   PortObj[M] = object
     ## Endpoint for messages of type ``M``.
-    events: HeapQueue[Event[M]]
+    events*: HeapQueue[Event[M]]
     comp {.cursor.}: Component
     sim {.cursor.}: Simulator
 
@@ -92,7 +92,7 @@ proc update*(t0, t1: SimulationTime): SimulationTime =
   if t0 == noEvent:
     return t1
   if t1 == noEvent:
-    return t1
+    return t0
   return min(int(t0), int(t1))
 
 #
@@ -104,7 +104,7 @@ proc updateNextEvent(comp: Component, nextEvent: SimulationTime) =
   ## or the input argument.
   comp.nextEvent = update(comp.nextEvent, nextEvent)
 
-method runComponent*(comp: Component, sim: Simulator, isStartup = false, isShutdown = false) {.base.} =
+method runComponent*(comp: Component, sim: Simulator, isStartup = false, isShutdown = false) {.base,locks:"unknown".} =
   ## Base method for the implementations of each component. This is
   ## run once at component startup, whenever new messages arrive, and
   ## once again at component shutdown.
@@ -145,7 +145,7 @@ macro component*(comp: untyped, ComponentType: untyped, body: untyped): untyped 
     isStartup = genSym(kind=nskParam, "isStartup")
   result = quote do:
     {.push hint[XDeclaredButNotUsed]:off.}
-    method runComponent*(`comp`: `ComponentType`, `simulatorSym`: Simulator, `isStartup` = false, `isShutdown` = false) =
+    method runComponent*(`comp`: `ComponentType`, `simulatorSym`: Simulator, `isStartup` = false, `isShutdown` = false) {.locks:"unknown".} =
       template `shutdown`(shutdownBody: untyped): untyped {.dirty.} =
         if `isShutdown`:
           shutdownBody
@@ -153,10 +153,11 @@ macro component*(comp: untyped, ComponentType: untyped, body: untyped): untyped 
         if `isStartup`:
           startupBody
       template onMessage(port: typed, msgName: untyped, onMessageBody: untyped): untyped {.dirty.} =
-        if not `isShutdown` and not `isStartup`:
-          for msgName in port.messages `simTime`:
-            onMessageBody
-        `comp`.nextEvent = update(`comp`.nextEvent, port.nextEventTime)
+        block:
+          if not `isShutdown` and not `isStartup`:
+            for msgName in port.messages `simTime`:
+              onMessageBody
+          `comp`.nextEvent = update(`comp`.nextEvent, port.nextEventTime)
       template useSimulator(name: untyped): untyped {.dirty.} =
         var name = `simulatorSym`
 
@@ -170,20 +171,17 @@ macro component*(comp: untyped, ComponentType: untyped, body: untyped): untyped 
 #
 
 proc newSimulator*(quitTime = SimulationTime(0)): Simulator =
-  return Simulator(quitTime: quitTime)
+  return Simulator(quitTime: quitTime, nextEvent: noEvent)
+
 
 proc currentTime*(sim: Simulator): SimulationTime =
   return sim.currentTime
 
-proc updateNextEvent(sim: Simulator, nextEvent: SimulationTime) =
-  sim.nextEvent = update(sim.nextEvent, nextEvent)
-
-proc resetNextEvent(sim: Simulator) =
-  sim.nextEvent = noEvent
 
 # Forward definitions
 proc connect[M](link: var Link[M], port: Port[M], sim: Simulator)
 proc connect[M](link: var BcastLink[M], port: Port[M], sim: Simulator)
+
 
 template connect*[M](sim: Simulator, fromComp: Component, link: typed, toComp: Component, port: var Port[M]) =
   ## Connect a link and a port.
@@ -191,11 +189,13 @@ template connect*[M](sim: Simulator, fromComp: Component, link: typed, toComp: C
   port.sim = sim
   port.comp = toComp
 
+
 proc register*(sim: Simulator, comp: Component) =
   ## Register a component with the simulator. Must be called before
   ## ``run``.
 
   sim.components.add comp
+
 
 proc keepGoing(sim: Simulator): bool =
   ## Return whether to continue processing events.
@@ -203,29 +203,47 @@ proc keepGoing(sim: Simulator): bool =
           sim.nextEvent != noEvent and
           (sim.quitTime == 0 or sim.quitTime >= sim.currentTime))
 
+
+proc updateTime(sim: Simulator) =
+  ## Determine what time the simulator should be set to at the
+  ## beginning of a round based on the next event to occur.
+  sim.currentTime = sim.nextEvent
+
+
+proc processComponents(sim: Simulator) =
+  ## Call all components main processing once for this time step.
+  for comp in sim.components:
+    assert comp.nextEvent == noEvent or comp.nextEvent >= sim.currentTime
+    if comp.nextEvent == sim.currentTime:
+      comp.runComponent sim
+
+
+proc updateNextEvent(sim: Simulator) =
+  ## Determine the time of the next event
+  sim.nextEvent = noEvent
+  for comp in sim.components:
+    sim.nextEvent = update(sim.nextEvent, comp.nextEvent)
+
+
 proc run*(sim: Simulator) =
   ## Run the simulation until no more messages remain or another
   ## termination condition is met.
-
-  sim.resetNextEvent
 
   # Initialize each component
   for comp in sim.components:
     comp.runComponent(sim, isStartup=true)
 
+  sim.updateNextEvent
+
   while sim.keepGoing:
-    sim.currentTime = sim.nextEvent
-    var nextEvent = noEvent
-    for comp in sim.components:
-      assert comp.nextEvent == noEvent or comp.nextEvent >= sim.currentTime
-      if comp.nextEvent == sim.currentTime:
-        comp.runComponent sim
-      nextEvent = update(nextEvent, comp.nextEvent)
-    sim.nextEvent = nextEvent
+    sim.updateTime
+    sim.processComponents
+    sim.updateNextEvent
 
   # Finalize each component
   for comp in sim.components:
     comp.runComponent(sim, isShutdown=true)
+
 
 proc quit*(sim: Simulator) =
   ## Tell the simulator to stop processing new messages. The simulator
@@ -245,7 +263,6 @@ proc addEvent[M](port: var Port[M], event: sink Event[M]) =
   ## next event timers for the containing component and the simulator.
 
   port.comp.updateNextEvent event.time
-  port.sim.updateNextEvent event.time
   port.events.push event
 
 proc nextEventTime*[M](port: Port[M]): SimulationTime =
@@ -260,7 +277,7 @@ iterator messages*[M](port: Port[M], time: SimulationTime): M =
   ## Iterate over all message in this port that happen at this time
   ## step. It is a serious programmatic error if any events are
   ## pending on this port that have a timestamp before the given time.
-  assert port.events[0].time >= time
+  assert port.events.len == 0 or port.events[0].time >= time
   while port.events.len() != 0 and port.events[0].time == time:
     yield port.events.pop().msg
 
@@ -282,6 +299,8 @@ proc latency*(link: BaseLink): SimulationTime =
 proc newLink*[M](latency: SimulationTime): Link[M] =
   ## Create a new ``Link`` with a minimum latency.
   # The other fields are set when connected
+  if latency <= 0:
+    raise newException(SimulationError, "Invalid link latency " & $latency)
   return Link[M](latency: latency)
 
 proc send*[M](link: var Link[M], msg: M, extraDelay=0) =
