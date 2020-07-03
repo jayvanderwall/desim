@@ -101,13 +101,13 @@ component comp, MultiMessageSend:
 component comp, MultiMessageRecv:
   useSimulator sim
   onMessage comp.recvPort, msg:
-    comp.msgs.add (msg, sim.currentTime)
+    comp.msgs.add (msg, sim.currentTime - 1)
 
 test "Multiple messages different delays":
   let
     sender = MultiMessageSend(
       msgs: @[(1, 0), (2, 5), (3, 25)],
-      sendLink: newLink[int](0)
+      sendLink: newLink[int](1)
     )
     receiver = MultiMessageRecv(recvPort: newPort[int]())
 
