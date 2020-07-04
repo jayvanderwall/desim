@@ -87,6 +87,8 @@ const noEvent = SimulationTime(-1)
 
 method runComponent*(comp: Component, sim: Simulator, isStartup = false, isShutdown = false) {.base,locks:"unknown".};
 
+method updateNextEvent(comp: Component) {.base.};
+
 #
 # Event
 #
@@ -152,7 +154,7 @@ proc updateTime(sim: Simulator) =
 proc processComponents(sim: Simulator) =
   ## Call all components main processing once for this time step.
   for comp in sim.components:
-    assert comp.nextEvent == noEvent or comp.nextEvent >= sim.currentTime
+    comp.updateNextEvent
     if comp.nextEvent == sim.currentTime:
       comp.runComponent sim
 
