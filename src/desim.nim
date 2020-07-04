@@ -275,6 +275,9 @@ proc connect[M](link: var Link[M], port: Port[M], sim: Simulator) =
 proc newBcastLink*[M](sim: Simulator, latency: SimulationTime): BcastLink[M] =
   ## Create a new ``BcastLink`` with a minimum latency.
   # The other fields are set when connected
+  if latency <= 0:
+    raise newException(SimulationError, "Invalid link latency " & $latency)
+
   return BcastLink[M](sim: sim, latency: latency)
 
 proc send*[M](link: var BcastLink[M], msg: M, extraDelay=0) =
@@ -311,16 +314,16 @@ proc connect[M](link: var BcastLink[M], port: Port[M], sim: Simulator) =
 #
 
 proc newTimer*[M](sim: Simulator): Timer[M] =
-  return Timer(sim: sim)
+  return Timer[M](sim: sim)
 
 
-proc add*[M](timer: var Timer[M], msg: M, delay: SimulationTime) =
-  ## Add a message to this timer to occur some time in the future.
+proc set*[M](timer: var Timer[M], msg: M, delay: SimulationTime) =
+  ## Set this timer to emit a message at some time in the future.
   if delay <= 0:
     raise newException(SimulationError, "Timer delay must be > 0")
   let
     time = timer.sim.currentTime + delay
-  timer.events.add Event[M](msg: msg, time: time)
+  timer.events.push Event[M](msg: msg, time: time)
 
 
 iterator messages*[M](timer: var Timer[M], time: SimulationTime): M =
@@ -332,7 +335,7 @@ iterator messages*[M](timer: var Timer[M], time: SimulationTime): M =
     yield timer.events.pop().msg
 
 
-proc nextEventTime[M](timer: Timer[M]): SimulationTime =
+proc nextEventTime*[M](timer: Timer[M]): SimulationTime =
   ## Return the earliest event time of all events pending on this
   ## timer.
   if len(timer.events) == 0:
