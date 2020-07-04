@@ -1,0 +1,11 @@
+Features that need to be implemented for initial release
+
+Introduction readme
+
+statistic publishing
+
+reference components by name
+
+logging
+
+documentation command
