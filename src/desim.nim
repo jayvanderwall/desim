@@ -124,14 +124,12 @@ proc connect[M](link: var Link[M], port: Port[M], sim: Simulator)
 proc connect[M](link: var BcastLink[M], port: Port[M], sim: Simulator)
 
 
-# TODO: Can this be a proc?
-template connect*[M](sim: Simulator, fromComp: Component, link: typed, toComp: Component, port: var Port[M]) =
+proc connect*[M; L: BaseLink](sim: Simulator, fromComp: Component, link: var L, toComp: Component, port: Port[M]) =
   ## Connect a link and a port.
   link.connect port, sim
 
 
-# TODO: Can this be a proc?
-template register*(sim: Simulator, comp: typed) =
+proc register*(sim: Simulator, comp: Component) =
   ## Register a component with the simulator. Must be called before
   ## ``run``.
 
