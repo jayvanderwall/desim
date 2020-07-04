@@ -231,6 +231,7 @@ iterator messages*[M](port: Port[M], time: SimulationTime): M =
 proc connect[M](link: var BaseLink, port: Port[M], sim: Simulator) =
   link.sim = sim
 
+
 proc latency*(link: BaseLink): SimulationTime =
   ## The minimum latency of messages sent on this link.
   return link.latency
@@ -239,13 +240,19 @@ proc latency*(link: BaseLink): SimulationTime =
 # Link
 #
 
-proc newLink*[M; T: Link[M]=Link[M]](sim: Simulator, latency: SimulationTime): T =
+proc baseNewLink*[M; T: Link[M]=Link[M]](sim: Simulator, latency: SimulationTime):
+                T =
   ## Create a new ``Link`` with a minimum latency. Optional second
   ## generic argument can be used to create derived instances.
   # The other fields are set when connected
   if latency <= 0:
     raise newException(SimulationError, "Invalid link latency " & $latency)
   return T(sim: sim, latency: latency)
+
+
+proc newLink*[M](sim: Simulator, latency: SimulationTime): Link[M] =
+  return baseNewLink[M, Link[M]](sim, latency)
+
 
 proc send*[M](link: var Link[M], msg: M, extraDelay=0) =
   ## Send a message over a ``Link``. Adds any value for `extraDelay`
@@ -269,6 +276,7 @@ proc send*[M](link: var Link[M], msg: M, extraDelay=0) =
 
   link.port.addEvent event
 
+
 proc connect[M](link: var Link[M], port: Port[M], sim: Simulator) =
   connect BaseLink(link), port, sim
   link.port = port
@@ -284,6 +292,7 @@ proc newBcastLink*[M](sim: Simulator, latency: SimulationTime): BcastLink[M] =
     raise newException(SimulationError, "Invalid link latency " & $latency)
 
   return BcastLink[M](sim: sim, latency: latency)
+
 
 proc send*[M](link: var BcastLink[M], msg: M, extraDelay=0) =
   ## Send a message over a ``BcastLink``. Adds any value for
@@ -324,7 +333,7 @@ proc newBatchLink*[M](sim: Simulator): BatchLink[M] =
   # Until we have multi-threading or processing on different ranks or
   # compute nodes there isn't much benefit to having anything other
   # than a 1 tick delay.
-  return newLink[M, BatchLink[M]](sim, 1)
+  return baseNewLink[M, BatchLink[M]](sim, 1)
 
 #
 # Timer

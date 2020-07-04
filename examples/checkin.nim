@@ -23,7 +23,7 @@ proc hours(sec: SimulationTime): SimulationTime =
   60 * minutes sec
 
 const
-  simulationDuration = hours 2
+  simulationDuration = minutes 2
   entranceToLine: SimulationTime = 20
   lineToCounter: SimulationTime = 10
 
@@ -75,17 +75,19 @@ type
     nextCustomerId: int
     shutdownTime: SimulationTime
 
-proc newEntrance(meanArrival: Poisson,
+proc newEntrance(sim: Simulator,
+                 meanArrival: Poisson,
                  hasBags: Choice[bool],
                  hasIssues: Choice[bool],
                  shutdownTime: SimulationTime): Entrance =
   ## Create a new Entrance using default latencies.
-  return Entrance(
-    line: newLink[Customer](entranceToLine),
-    arrivalLink: newLink[bool](1), arrivalPort: newPort[bool](),
+  result = Entrance(
+    line: newLink[Customer](sim, entranceToLine),
+    arrivalLink: newLink[bool](sim, 1), arrivalPort: newPort[bool](),
     meanArrival: meanArrival, hasBags: hasBags, hasIssues: hasIssues,
     shutdownTime: shutdownTime
   )
+  sim.register result
 
 
 proc makeCustomer(ent: Entrance, time: Simulationtime): Customer =
@@ -143,12 +145,13 @@ type
     customers: Deque[Customer]
     readyCounters: seq[int]
 
-proc newLine(): Line =
+proc newLine(sim: Simulator): Line =
   ## Create a new Line with default objects
-  return Line(customerIn: newPort[Customer](),
-              customerOut: newBcastLink[(Customer, int)](lineToCounter),
-              counterReady: newPort[int](),
-              customers: initDeque[Customer]())
+  result = Line(customerIn: newPort[Customer](),
+                customerOut: newBcastLink[(Customer, int)](sim, lineToCounter),
+                counterReady: newPort[int](),
+                customers: initDeque[Customer]())
+  sim.register result
 
 proc sendCustomers(line: Line) =
   ## Send the next waiting customer to an available line
@@ -189,10 +192,11 @@ type
     index: int
 
 
-proc newCounter(index: int): Counter =
-  return Counter(customerIn: newPort[(Customer, int)](),
-                 ready: newLink[int](baseCustomerTime),
-                 index: index)
+proc newCounter(sim: Simulator, index: int): Counter =
+  result = Counter(customerIn: newPort[(Customer, int)](),
+                   ready: newLink[int](sim, baseCustomerTime),
+                   index: index)
+  sim.register result
 
 
 proc calculateExtraWaitTime(customer: Customer): SimulationTime =
@@ -248,25 +252,19 @@ proc main() =
     meanArrival = alea.poisson(10)
     hasBags = alea.choice([true, false, false, false])
     hasIssues = alea.choice([true, false, false, false, false, false])
-    shutdownTime = minutes 2
 
     sim = newSimulator()
-    ent = newEntrance(meanArrival,
+    ent = newEntrance(sim,
+                      meanArrival,
                       hasBags,
                       hasIssues,
-                      shutdownTime)
-    line = newLine()
-    counters: seq[Counter]
-
-  sim.register(ent)
-  sim.register(line)
+                      simulationDuration)
+    line = newLine(sim)
 
   sim.connect(ent, ent.line, line, line.customerIn)
 
   for i in 0..<1:
-    var counter = newCounter i
-    counters.add counter
-    sim.register counter
+    var counter = newCounter(sim, i)
     sim.connect(line, line.customerOut, counter, counter.customerIn)
     sim.connect(counter, counter.ready, line, line.counterReady)
 

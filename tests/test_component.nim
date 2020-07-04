@@ -244,10 +244,62 @@ test "Random Communication between many components":
 
   for comp in comps:
     for (msg, idx) in comp.sent:
-      check(idx >= 0 and idx < comps.len)
+      require(idx >= 0 and idx < comps.len)
       let cidx = comps[idx].received.find msg
-      check(cidx != -1)
+      require(cidx != -1)
       comps[idx].received.del cidx
 
   for comp in comps:
     check(comp.received.len == 0)
+
+#
+# BatchLink
+#
+
+type
+  TestBatchLinkComponent = ref object of Component
+    link: BatchLink[int]
+    timer: Timer[bool]
+    msgs: seq[int]
+    index: int
+
+
+proc newTestBatchLinkComponent(sim: Simulator): TestBatchLinkComponent =
+  var
+    link = newBatchLink[int](sim)
+    timer = newTimer[bool](sim)
+  result = TestBatchLinkComponent(link: link,
+                                  timer: timer)
+  sim.register result
+
+
+component comp, TestBatchLinkComponent:
+
+  startup:
+    assert comp.msgs.len > 0, "Please test something"
+    comp.timer.set true, rand(1..20)
+
+  onTimer comp.timer, _:
+    comp.link.send comp.msgs[comp.index]
+    comp.index += 1
+    if comp.index < comp.msgs.len:
+      comp.timer.set true, rand(1..20)
+
+
+test "Batch Link":
+  var
+    sim = newSimulator()
+    testBatch = newTestBatchLinkComponent(sim)
+    testRecv = newMultiMessageRecv(sim)
+
+  sim.connect(testBatch, testBatch.link, testRecv, testRecv.recvPort)
+
+  let count = rand(1..10)
+  testBatch.msgs = toSeq(1..count).map(_ => rand(-10..10))
+
+  sim.run()
+
+  check(testBatch.msgs.len == testRecv.msgs.len)
+
+  for (expMsg, actMsgTuple) in zip(testBatch.msgs, testRecv.msgs):
+    check(expMsg == actMsgTuple[0])

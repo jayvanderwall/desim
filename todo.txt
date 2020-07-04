@@ -7,3 +7,5 @@ statistic publishing
 logging
 
 documentation command
+
+Make generic component constructor
