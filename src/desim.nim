@@ -66,16 +66,26 @@ type
 
   PortObj[M] = object
     ## Endpoint for messages of type ``M``.
-    events*: HeapQueue[Event[M]]
-    comp {.cursor.}: Component
-    sim {.cursor.}: Simulator
+    events: HeapQueue[Event[M]]
 
   Port*[M] = ref PortObj[M]
+
+  Timer*[M] = object
+    ## A Timer allows a component to schedule an event in the future
+    ## without using a self-link and port.
+    events: HeapQueue[Event[M]]
+    sim {.cursor.}: Simulator
 
   SimulationError* = object of CatchableError
     ## Base exception for all exceptions raised by the simulation.
 
 const noEvent = SimulationTime(-1)
+
+#
+# Forward Declarations
+#
+
+method runComponent*(comp: Component, sim: Simulator, isStartup = false, isShutdown = false) {.base,locks:"unknown".};
 
 #
 # Event
@@ -96,77 +106,6 @@ proc update*(t0, t1: SimulationTime): SimulationTime =
   return min(int(t0), int(t1))
 
 #
-# Component
-#
-
-proc updateNextEvent(comp: Component, nextEvent: SimulationTime) =
-  ## Update the next event timer to be the sooner of the current timer
-  ## or the input argument.
-  comp.nextEvent = update(comp.nextEvent, nextEvent)
-
-method runComponent*(comp: Component, sim: Simulator, isStartup = false, isShutdown = false) {.base,locks:"unknown".} =
-  ## Base method for the implementations of each component. This is
-  ## run once at component startup, whenever new messages arrive, and
-  ## once again at component shutdown.
-  discard
-
-macro component*(comp: untyped, ComponentType: untyped, body: untyped): untyped =
-  ## Define a component's behavior. This takes the name you want to
-  ## refer to the component as, and the component's type, then
-  ## introduces a scope to define the behavior of the component.
-  ##
-  ## This macro introduces several other templates locally for
-  ## different actions. The ``shutdown`` template takes no arguments
-  ## and is run once when the node is cleanly shutdown. The
-  ## ``startup`` template is similar and runs on startup. The
-  ## ``onMessage`` macro takes a port and a name for the messages and
-  ## iterates over them. ``useSimulator`` can be used to declare a
-  ## name by which you will refer to the simulator object in the rest
-  ## of the component definition.
-  ##
-  ## Example:
-  ## ```nim
-  ## component comp, MyComponent:
-  ##   useSimulator sim
-  ##   startup:
-  ##     comp.myLink.send newMsg("hello")
-  ##   shutdown:
-  ##     log.info("Shutting down", sim.currentTime)
-  ##   onMessage myPort, msg:
-  ##     log.info("Received message", msg.msg)
-  ## ```
-
-  let
-    shutdown = genSym(kind=nskTemplate, ident="shutdown")
-    startup = genSym(kind=nskTemplate, ident="startup")
-    simulatorSym = genSym(kind=nskParam, ident="simulator")
-    simTime = genSym(kind=nskLet, ident="simTime")
-    isShutdown = genSym(kind=nskParam, "isShutdown")
-    isStartup = genSym(kind=nskParam, "isStartup")
-  result = quote do:
-    {.push hint[XDeclaredButNotUsed]:off.}
-    method runComponent*(`comp`: `ComponentType`, `simulatorSym`: Simulator, `isStartup` = false, `isShutdown` = false) {.locks:"unknown".} =
-      template `shutdown`(shutdownBody: untyped): untyped {.dirty.} =
-        if `isShutdown`:
-          shutdownBody
-      template `startup`(startupBody: untyped): untyped {.dirty.} =
-        if `isStartup`:
-          startupBody
-      template onMessage(port: typed, msgName: untyped, onMessageBody: untyped): untyped {.dirty.} =
-        block:
-          if not `isShutdown` and not `isStartup`:
-            for msgName in port.messages `simTime`:
-              onMessageBody
-          `comp`.nextEvent = update(`comp`.nextEvent, port.nextEventTime)
-      template useSimulator(name: untyped): untyped {.dirty.} =
-        var name = `simulatorSym`
-
-      `comp`.nextEvent = noEvent
-      let `simTime` = `simulatorSym`.currentTime
-      `body`
-    {.pop.}
-
-#
 #  Simulator methods
 #
 
@@ -183,14 +122,14 @@ proc connect[M](link: var Link[M], port: Port[M], sim: Simulator)
 proc connect[M](link: var BcastLink[M], port: Port[M], sim: Simulator)
 
 
+# TODO: Can this be a proc?
 template connect*[M](sim: Simulator, fromComp: Component, link: typed, toComp: Component, port: var Port[M]) =
   ## Connect a link and a port.
   link.connect port, sim
-  port.sim = sim
-  port.comp = toComp
 
 
-proc register*(sim: Simulator, comp: Component) =
+# TODO: Can this be a proc?
+template register*(sim: Simulator, comp: typed) =
   ## Register a component with the simulator. Must be called before
   ## ``run``.
 
@@ -259,10 +198,8 @@ proc newPort*[M](): Port[M] =
   return Port[M]()
 
 proc addEvent[M](port: var Port[M], event: sink Event[M]) =
-  ## Add this event to the pending list for the port, and update the
-  ## next event timers for the containing component and the simulator.
+  ## Add this event to the pending list for the port.
 
-  port.comp.updateNextEvent event.time
   port.events.push event
 
 proc nextEventTime*[M](port: Port[M]): SimulationTime =
@@ -296,12 +233,12 @@ proc latency*(link: BaseLink): SimulationTime =
 # Link
 #
 
-proc newLink*[M](latency: SimulationTime): Link[M] =
+proc newLink*[M](sim: Simulator, latency: SimulationTime): Link[M] =
   ## Create a new ``Link`` with a minimum latency.
   # The other fields are set when connected
   if latency <= 0:
     raise newException(SimulationError, "Invalid link latency " & $latency)
-  return Link[M](latency: latency)
+  return Link[M](sim: sim, latency: latency)
 
 proc send*[M](link: var Link[M], msg: M, extraDelay=0) =
   ## Send a message over a ``Link``. Adds any value for `extraDelay`
@@ -311,7 +248,12 @@ proc send*[M](link: var Link[M], msg: M, extraDelay=0) =
   ## than its is.
 
   if link.port == nil:
+    # TODO: Maybe there are actually good use cases for this and the
+    # message should just be ignored.
     raise newException(SimulationError, "Link was not connected")
+
+  if extraDelay < 0:
+    raise newException(SimulationError, "extraDelay cannot be negative")
 
   let
     totalLatency = link.latency + extraDelay
@@ -328,10 +270,10 @@ proc connect[M](link: var Link[M], port: Port[M], sim: Simulator) =
 # BcastLink
 #
 
-proc newBcastLink*[M](latency: SimulationTime): BcastLink[M] =
+proc newBcastLink*[M](sim: Simulator, latency: SimulationTime): BcastLink[M] =
   ## Create a new ``BcastLink`` with a minimum latency.
   # The other fields are set when connected
-  return BcastLink[M](latency: latency)
+  return BcastLink[M](sim: sim, latency: latency)
 
 proc send*[M](link: var BcastLink[M], msg: M, extraDelay=0) =
   ## Send a message over a ``BcastLink``. Adds any value for
@@ -347,6 +289,9 @@ proc send*[M](link: var BcastLink[M], msg: M, extraDelay=0) =
     # This means no connections were made
     return
 
+  if extraDelay < 0:
+    raise newException(SimulationError, "extraDelay cannot be negative")
+
   let
     totalLatency = link.latency + extraDelay
     event = Event[M](msg: msg,
@@ -359,3 +304,124 @@ proc connect[M](link: var BcastLink[M], port: Port[M], sim: Simulator) =
   connect BaseLink(link), port, sim
   link.ports.add port
 
+#
+# Timer
+#
+
+proc newTimer*[M](sim: Simulator): Timer[M] =
+  return Timer(sim: sim)
+
+
+proc add*[M](timer: var Timer[M], msg: M, delay: SimulationTime) =
+  ## Add a message to this timer to occur some time in the future.
+  if delay <= 0:
+    raise newException(SimulationError, "Timer delay must be > 0")
+  let
+    time = timer.sim.currentTime + delay
+  timer.events.add Event[M](msg: msg, time: time)
+
+
+iterator messages*[M](timer: var Timer[M], time: SimulationTime): M =
+  ## Iterate over all message in this timer that happen at this time
+  ## step. It is a serious programmatic error if any events are
+  ## pending on this timer that have a timestamp before the given time.
+  assert timer.events.len == 0 or timer.events[0].time >= time
+  while timer.events.len() != 0 and timer.events[0].time == time:
+    yield timer.events.pop().msg
+
+
+proc nextEventTime[M](timer: Timer[M]): SimulationTime =
+  ## Return the earliest event time of all events pending on this
+  ## timer.
+  if len(timer.events) == 0:
+    return noEvent
+  else:
+    return timer.events[0].time
+
+#
+# Component
+#
+
+
+method runComponent*(comp: Component, sim: Simulator, isStartup = false, isShutdown = false) {.base,locks:"unknown".} =
+  ## Base method for the implementations of each component. This is
+  ## run once at component startup, whenever new messages arrive, and
+  ## once again at component shutdown.
+  discard
+
+method updateNextEvent(comp: Component) {.base.} =
+  discard
+
+macro component*(comp: untyped, ComponentType: untyped, body: untyped): untyped =
+  ## Define a component's behavior. This takes the name you want to
+  ## refer to the component as, and the component's type, then
+  ## introduces a scope to define the behavior of the component.
+  ##
+  ## This macro introduces several other templates locally for
+  ## different actions. The ``shutdown`` template takes no arguments
+  ## and is run once when the node is cleanly shutdown. The
+  ## ``startup`` template is similar and runs on startup. The
+  ## ``onMessage`` macro takes a port and a name for the messages and
+  ## runs its body for each new message. Similarly ``onTimer`` takes a
+  ## timer and message name and handles timers. ``useSimulator`` can
+  ## be used to declare a name by which you will refer to the
+  ## simulator object in the rest of the component definition.
+  ##
+  ## Example:
+  ## ```nim
+  ## component comp, MyComponent:
+  ##   useSimulator sim
+  ##   startup:
+  ##     comp.myLink.send newMsg("hello")
+  ##   shutdown:
+  ##     log.info("Shutting down", sim.currentTime)
+  ##   onMessage comp.myPort, msg:
+  ##     log.info("Received message", msg)
+  ##   onTimer comp.myTimer, msg:
+  ##     log.info("Timer: ", msg)
+  ## ```
+
+  let
+    shutdown = genSym(kind=nskTemplate, ident="shutdown")
+    startup = genSym(kind=nskTemplate, ident="startup")
+    simulatorSym = genSym(kind=nskParam, ident="simulator")
+    simTime = genSym(kind=nskLet, ident="simTime")
+    isShutdown = genSym(kind=nskParam, "isShutdown")
+    isStartup = genSym(kind=nskParam, "isStartup")
+    nextEventTime = bindSym("nextEventTime")
+  result = quote do:
+    {.push hint[XDeclaredButNotUsed]:off.}
+    method updateNextEvent*(`comp`: `ComponentType`) =
+      `comp`.nextEvent = noEvent
+      for name, value in fieldPairs(`comp`[]):
+        when value is Port:
+          `comp`.nextEvent = update(`comp`.nextEvent, value.nextEventTime)
+        when value is Timer:
+          `comp`.nextEvent = update(`comp`.nextEvent, value.nextEventTime)
+      
+    method runComponent*(`comp`: `ComponentType`, `simulatorSym`: Simulator, `isStartup` = false, `isShutdown` = false) {.locks:"unknown".} =
+      template `shutdown`(shutdownBody: untyped): untyped {.dirty.} =
+        if `isShutdown`:
+          shutdownBody
+      template `startup`(startupBody: untyped): untyped {.dirty.} =
+        if `isStartup`:
+          startupBody
+      template onMessage(port: typed, msgName: untyped, onMessageBody: untyped): untyped {.dirty.} =
+        block:
+          if not `isShutdown` and not `isStartup`:
+            for msgName in port.messages `simTime`:
+              onMessageBody
+          `comp`.nextEvent = update(`comp`.nextEvent, `nextEventTime`(port))
+      template onTimer(timer: typed, msgName: untyped, onMessageBody: untyped): untyped {.dirty.} =
+        block:
+          if not `isShutdown` and not `isStartup`:
+            for msgName in timer.messages `simTime`:
+              onMessageBody
+          `comp`.nextEvent = update(`comp`.nextEvent, `nextEventTime`(timer))
+      template useSimulator(name: untyped): untyped {.dirty.} =
+        var name = `simulatorSym`
+
+      `comp`.nextEvent = noEvent
+      let `simTime` = `simulatorSym`.currentTime
+      `body`
+    {.pop.}

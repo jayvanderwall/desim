@@ -17,6 +17,15 @@ type
     selfLink: Link[bool]
     selfPort: Port[bool]
 
+
+proc newTestSelfComponent(sim: Simulator): TestSelfComponent =
+  result = TestSelfComponent(
+    selfLink: newLink[bool](sim, 1),
+    selfPort: newPort[bool](),
+  )
+  sim.register(result)
+
+
 component comp, TestSelfComponent:
   useSimulator sim
 
@@ -27,56 +36,62 @@ component comp, TestSelfComponent:
   onMessage comp.selfPort, msg:
     comp.counter += 1
 
-proc makeTestSim(components: seq[Component]): Simulator =
-  result = newSimulator()
-  for comp in components:
-    result.register(comp)
 
 test "Component with self loop":
 
-  let
-    testComp = TestSelfComponent(selfPort: Port[bool]())
-
   var
-    components: seq[Component]
-  components.add(testComp)
+    sim = newSimulator()
 
-  makeTestSim(components).run()
+  let
+    testComp = newTestSelfComponent(sim)
+
+  sim.run()
 
   check(testComp.counter == 1)
 
-type
-  TestSendComponent[L] = ref object of Component
-    msg: int
-    sendLink: L
-
-  TestRecvComponent = ref object of Component
-    msg: int
-    recvPort: Port[int]
 
 #
 # Two components communicating
 #
 
-component comp, TestSendComponent[Link[int]]:
+
+type
+  TestSendComponent = ref object of Component
+    msg: int
+    sendLink: Link[int]
+
+  TestRecvComponent = ref object of Component
+    msg: int
+    recvPort: Port[int]
+
+
+proc newTestSendComponent(sim: Simulator, msg: int): TestSendComponent =
+  result = TestSendComponent(msg: msg, sendLink: newLink[int](sim, 1))
+  sim.register result
+
+
+proc newTestRecvComponent(sim: Simulator): TestRecvComponent =
+  result = TestRecvComponent(recvPort: newPort[int]())
+  sim.register result
+
+
+component comp, TestSendComponent:
   startup:
     comp.sendLink.send(comp.msg)
+
 
 component comp, TestRecvComponent:
   onMessage comp.recvPort, msg:
     comp.msg = msg
 
+
 test "Two Components communicating":
+  var
+    sim = newSimulator()
+
   let
-    sendComp = TestSendComponent[Link[int]](msg: 42)
-    recvComp = TestRecvComponent(msg: 0, recvPort: Port[int]())
-
-  var components: seq[Component]
-
-  components.add(sendComp)
-  components.add(recvComp)
-
-  var sim = makeTestSim(components)
+    sendComp = newTestSendComponent(sim, 42)
+    recvComp = newTestRecvComponent(sim)
 
   sim.connect(sendComp, sendComp.sendLink, recvComp, recvComp.recvPort)
 
@@ -97,6 +112,17 @@ type
     msgs: seq[(int, SimulationTime)]
     recvPort: Port[int]
 
+
+proc newMultiMessageSend(sim: Simulator, msgs: seq[(int, SimulationTime)]): MultiMessageSend =
+  result = MultiMessageSend(msgs: msgs, sendLink: newLink[int](sim, 1))
+  sim.register result
+
+
+proc newMultiMessageRecv(sim: Simulator): MultiMessageRecv =
+  result = MultiMessageRecv(recvPort: newPort[int]())
+  sim.register result
+
+
 component comp, MultiMessageSend:
   startup:
     for msg in comp.msgs:
@@ -108,14 +134,12 @@ component comp, MultiMessageRecv:
     comp.msgs.add (msg, sim.currentTime - 1)
 
 test "Multiple messages different delays":
-  let
-    sender = MultiMessageSend(
-      msgs: @[(1, 0), (2, 5), (3, 25)],
-      sendLink: newLink[int](1)
-    )
-    receiver = MultiMessageRecv(recvPort: newPort[int]())
+  var
+    sim = newSimulator()
 
-  var sim = makeTestSim(@[sender, receiver])
+  let
+    sender = newMultiMessageSend(sim, @[(1, 0), (2, 5), (3, 25)])
+    receiver = newMultiMessageRecv(sim)
 
   sim.connect(sender, sender.sendLink, receiver, receiver.recvPort)
 
@@ -128,26 +152,30 @@ test "Multiple messages different delays":
 # Broadcast to component
 #
 
-component comp, TestSendComponent[BcastLink[int]]:
+type
+  TestBcastComponent = ref object of Component
+    msg: int
+    sendLink: BcastLink[int]
+
+
+proc newTestBcastComponent(sim: Simulator, msg: int): TestBcastComponent =
+  result = TestBcastComponent(msg: msg, sendLink: newBcastLink[int](sim, 1))
+  sim.register result
+
+
+component comp, TestBcastComponent:
   startup:
     comp.sendLink.send(comp.msg)
 
+
 test "Broadcast to two components":
+  var sim = newSimulator()
   let
-    sender = TestSendComponent[BcastLink[int]](msg: 42, sendLink: newBcastLink[int](0))
+    sender = newTestBcastComponent(sim, 42)
     receivers = [
-      TestRecvComponent(msg: 0, recvPort: newPort[int]()),
-      TestRecvComponent(msg: 0, recvPort: newPort[int]())
+      newTestRecvComponent(sim),
+      newTestRecvComponent(sim)
     ]
-
-  var components: seq[Component]
-
-  components.add(sender)
-  for receiver in receivers:
-    components.add(receiver)
-
-  var
-    sim = makeTestSim(components)
 
   for receiver in receivers:
     sim.connect(sender, sender.sendLink, receiver, receiver.recvPort)
@@ -168,11 +196,14 @@ type
     received: seq[int]
     sent: seq[(int, int)]
 
-proc newRandomComponent(total: int, index: int): RandomComponent =
-  return RandomComponent(
+
+proc newRandomComponent(sim: Simulator, total: int, index: int): RandomComponent =
+  result = RandomComponent(
     input: newPort[int](),
-    outs: toSeq(0..<total).map(_ => newLink[int](1)),
+    outs: toSeq(0..<total).map(_ => newLink[int](sim, 1)),
   )
+  sim.register result
+
 
 component comp, RandomComponent:
 
@@ -187,18 +218,17 @@ component comp, RandomComponent:
   onMessage comp.input, msg:
     comp.received.add msg
 
+
 test "Random Communication between many components":
-  let
-    count = rand(3..20)
   var
+    sim = newSimulator()
     comps: seq[RandomComponent]
 
-  for i in 0..<count:
-    comps.add newRandomComponent(count, i)
+  let
+    count = rand(3..20)
 
-  var
-    retyped_comps = comps.mapIt(Component(it))
-    sim = makeTestSim(retyped_comps)
+  for i in 0..<count:
+    comps.add newRandomComponent(sim, count, i)
 
   for i in 0..<count:
     for j in i..<count:
