@@ -64,6 +64,12 @@ type
     ## efficicency, the message is not necessarily copied.
     ports: seq[Port[M]]
 
+  BatchLink*[M] = object of Link[M]
+    ## Connect to a port with implementation-defined latency that may
+    ## not be consistent message to message. A BatchLink is useful for
+    ## most-efficiently moving simulation metadata such as statistics
+    ## or log messages.
+
   PortObj[M] = object
     ## Endpoint for messages of type ``M``.
     events: HeapQueue[Event[M]]
@@ -233,12 +239,13 @@ proc latency*(link: BaseLink): SimulationTime =
 # Link
 #
 
-proc newLink*[M](sim: Simulator, latency: SimulationTime): Link[M] =
-  ## Create a new ``Link`` with a minimum latency.
+proc newLink*[M; T: Link[M]=Link[M]](sim: Simulator, latency: SimulationTime): T =
+  ## Create a new ``Link`` with a minimum latency. Optional second
+  ## generic argument can be used to create derived instances.
   # The other fields are set when connected
   if latency <= 0:
     raise newException(SimulationError, "Invalid link latency " & $latency)
-  return Link[M](sim: sim, latency: latency)
+  return T(sim: sim, latency: latency)
 
 proc send*[M](link: var Link[M], msg: M, extraDelay=0) =
   ## Send a message over a ``Link``. Adds any value for `extraDelay`
@@ -306,6 +313,18 @@ proc send*[M](link: var BcastLink[M], msg: M, extraDelay=0) =
 proc connect[M](link: var BcastLink[M], port: Port[M], sim: Simulator) =
   connect BaseLink(link), port, sim
   link.ports.add port
+
+#
+# BatchLink
+#
+
+proc newBatchLink*[M](sim: Simulator): BatchLink[M] =
+  ## Create a new BatchLink. The simulator framework will determine
+  ## the latency.
+  # Until we have multi-threading or processing on different ranks or
+  # compute nodes there isn't much benefit to having anything other
+  # than a 1 tick delay.
+  return newLink[M, BatchLink[M]](sim, 1)
 
 #
 # Timer
