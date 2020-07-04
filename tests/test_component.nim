@@ -2,6 +2,10 @@ import unittest
 
 import desim
 import sequtils
+import random
+import sugar
+
+randomize()
 
 #
 # Component with self loop
@@ -152,3 +156,68 @@ test "Broadcast to two components":
 
   for idx, receiver in receivers:
     check(receiver.msg == sender.msg)
+
+#
+# Random communication
+#
+
+type
+  RandomComponent = ref object of Component
+    input: Port[int]
+    outs: seq[Link[int]]
+    received: seq[int]
+    sent: seq[(int, int)]
+
+proc newRandomComponent(total: int, index: int): RandomComponent =
+  return RandomComponent(
+    input: newPort[int](),
+    outs: toSeq(0..<total).map(_ => newLink[int](1)),
+  )
+
+component comp, RandomComponent:
+
+  startup:
+    let
+      msg = rand(100)
+      dst = rand(comp.outs.len - 1)
+    # This may send a message to this component, which is fine.
+    comp.outs[dst].send msg
+    comp.sent.add (msg, dst)
+
+  onMessage comp.input, msg:
+    comp.received.add msg
+
+test "Random Communication between many components":
+  let
+    count = rand(3..20)
+  var
+    comps: seq[RandomComponent]
+
+  for i in 0..<count:
+    comps.add newRandomComponent(count, i)
+
+  var
+    retyped_comps = comps.mapIt(Component(it))
+    sim = makeTestSim(retyped_comps)
+
+  for i in 0..<count:
+    for j in i..<count:
+      var
+        ii = i
+        jj = j
+      for k in 1..2:
+        sim.connect(comps[ii], comps[ii].outs[jj],
+                    comps[jj], comps[jj].input)
+        swap(ii, jj)
+
+  sim.run()
+
+  for comp in comps:
+    for (msg, idx) in comp.sent:
+      check(idx >= 0 and idx < comps.len)
+      let cidx = comps[idx].received.find msg
+      check(cidx != -1)
+      comps[idx].received.del cidx
+
+  for comp in comps:
+    check(comp.received.len == 0)
