@@ -135,7 +135,7 @@ proc connect*[M; L: BaseLink](sim: Simulator, fromComp: Component, link: var L, 
   link.connect port, sim
 
 
-proc register*(sim: Simulator, comp: Component) =
+proc register(sim: Simulator, comp: Component) =
   ## Register a component with the simulator. Must be called before
   ## ``run``.
 
@@ -374,14 +374,23 @@ proc nextEventTime*[M](timer: Timer[M]): SimulationTime =
 #
 
 
+proc newComponent*[T: Component](sim: Simulator): T =
+  ## Create a new component of the correct subtype. It will be
+  ## registered with the simulator.
+  result = T()
+  sim.register result
+
+
 method runComponent*(comp: Component, sim: Simulator, isStartup = false, isShutdown = false) {.base,locks:"unknown".} =
   ## Base method for the implementations of each component. This is
   ## run once at component startup, whenever new messages arrive, and
   ## once again at component shutdown.
   discard
 
+
 method updateNextEvent(comp: Component) {.base.} =
   discard
+
 
 macro component*(comp: untyped, ComponentType: untyped, body: untyped): untyped =
   ## Define a component's behavior. This takes the name you want to

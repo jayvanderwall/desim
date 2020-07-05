@@ -19,11 +19,10 @@ type
 
 
 proc newTestSelfComponent(sim: Simulator): TestSelfComponent =
-  result = TestSelfComponent(
-    selfLink: newLink[bool](sim, 1),
-    selfPort: newPort[bool](),
-  )
-  sim.register(result)
+  result = newComponent[TestSelfComponent](sim)
+  var link = newLink[bool](sim, 1)
+  result.selfLink = link
+  result.selfPort = newPort[bool]()
 
 
 component comp, TestSelfComponent:
@@ -66,13 +65,15 @@ type
 
 
 proc newTestSendComponent(sim: Simulator, msg: int): TestSendComponent =
-  result = TestSendComponent(msg: msg, sendLink: newLink[int](sim, 1))
-  sim.register result
+  result = newComponent[TestSendComponent](sim)
+  result.msg = msg
+  var link = newLink[int](sim, 1)
+  result.sendLink = link
 
 
 proc newTestRecvComponent(sim: Simulator): TestRecvComponent =
-  result = TestRecvComponent(recvPort: newPort[int]())
-  sim.register result
+  result = newComponent[TestRecvComponent](sim)
+  result.recvPort = newPort[int]()
 
 
 component comp, TestSendComponent:
@@ -113,14 +114,17 @@ type
     recvPort: Port[int]
 
 
-proc newMultiMessageSend(sim: Simulator, msgs: seq[(int, SimulationTime)]): MultiMessageSend =
-  result = MultiMessageSend(msgs: msgs, sendLink: newLink[int](sim, 1))
-  sim.register result
+proc newMultiMessageSend(sim: Simulator, msgs: seq[(int, SimulationTime)]):
+                        MultiMessageSend =
+  result = newComponent[MultiMessageSend](sim)
+  result.msgs = msgs
+  var link = newLink[int](sim, 1)
+  result.sendLink = link
 
 
 proc newMultiMessageRecv(sim: Simulator): MultiMessageRecv =
-  result = MultiMessageRecv(recvPort: newPort[int]())
-  sim.register result
+  result = newComponent[MultiMessageRecv](sim)
+  result.recvPort = newPort[int]()
 
 
 component comp, MultiMessageSend:
@@ -159,8 +163,10 @@ type
 
 
 proc newTestBcastComponent(sim: Simulator, msg: int): TestBcastComponent =
-  result = TestBcastComponent(msg: msg, sendLink: newBcastLink[int](sim, 1))
-  sim.register result
+  result = newComponent[TestBcastComponent](sim)
+  result.msg = msg
+  var link = newBcastLink[int](sim, 1)
+  result.sendLink = link
 
 
 component comp, TestBcastComponent:
@@ -198,11 +204,11 @@ type
 
 
 proc newRandomComponent(sim: Simulator, total: int, index: int): RandomComponent =
-  result = RandomComponent(
-    input: newPort[int](),
-    outs: toSeq(0..<total).map(_ => newLink[int](sim, 1)),
-  )
-  sim.register result
+  result = newComponent[RandomComponent](sim)
+  result.input = newPort[int]()
+  #result.outs = toSeq(0..<total).map(_ => newLink[int](sim, 1)
+  result.outs = collect(newSeq):
+    for _ in 0..<total: newLink[int](sim, 1)
 
 
 component comp, RandomComponent:
@@ -265,12 +271,10 @@ type
 
 
 proc newTestBatchLinkComponent(sim: Simulator): TestBatchLinkComponent =
-  var
-    link = newBatchLink[int](sim)
-    timer = newTimer[bool](sim)
-  result = TestBatchLinkComponent(link: link,
-                                  timer: timer)
-  sim.register result
+  result = newComponent[TestBatchLinkComponent](sim)
+  var link = newBatchLink[int](sim)
+  result.link = link
+  result.timer = newTimer[bool](sim)
 
 
 component comp, TestBatchLinkComponent:

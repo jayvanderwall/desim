@@ -17,8 +17,9 @@ type
 
 proc newTestComponent(sim: Simulator,
                       events: seq[(int, SimulationTime)]): TestComponent =
-  result = TestComponent(selfTimer: newTimer[int](sim), toSend: events)
-  sim.register result
+  result = newComponent[TestComponent](sim)
+  result.selfTimer = newTimer[int](sim)
+  result.toSend = events
 
 
 component comp, TestComponent:

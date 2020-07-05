@@ -81,13 +81,14 @@ proc newEntrance(sim: Simulator,
                  hasIssues: Choice[bool],
                  shutdownTime: SimulationTime): Entrance =
   ## Create a new Entrance using default latencies.
-  result = Entrance(
-    line: newLink[Customer](sim, entranceToLine),
-    arrivalLink: newLink[bool](sim, 1), arrivalPort: newPort[bool](),
-    meanArrival: meanArrival, hasBags: hasBags, hasIssues: hasIssues,
-    shutdownTime: shutdownTime
-  )
-  sim.register result
+  result = newComponent[Entrance](sim)
+  result.line = newLink[Customer](sim, entranceToLine)
+  result.arrivalLink = newLink[bool](sim, 1)
+  result.arrivalPort = newPort[bool]()
+  result.meanArrival = meanArrival
+  result.hasBags = hasBags
+  result.hasIssues = hasIssues
+  result.shutdownTime = shutdownTime
 
 
 proc makeCustomer(ent: Entrance, time: Simulationtime): Customer =
@@ -147,11 +148,12 @@ type
 
 proc newLine(sim: Simulator): Line =
   ## Create a new Line with default objects
-  result = Line(customerIn: newPort[Customer](),
-                customerOut: newBcastLink[(Customer, int)](sim, lineToCounter),
-                counterReady: newPort[int](),
-                customers: initDeque[Customer]())
-  sim.register result
+  result = newComponent[Line](sim)
+  result.customerIn = newPort[Customer]()
+  result.customerOut = newBcastLink[(Customer, int)](sim, lineToCounter)
+  result.counterReady = newPort[int]()
+  result.customers = initDeque[Customer]()
+
 
 proc sendCustomers(line: Line) =
   ## Send the next waiting customer to an available line
@@ -193,10 +195,10 @@ type
 
 
 proc newCounter(sim: Simulator, index: int): Counter =
-  result = Counter(customerIn: newPort[(Customer, int)](),
-                   ready: newLink[int](sim, baseCustomerTime),
-                   index: index)
-  sim.register result
+  result = newComponent[Counter](sim)
+  result.customerIn = newPort[(Customer, int)]()
+  result.ready = newLink[int](sim, baseCustomerTime)
+  result.index = index
 
 
 proc calculateExtraWaitTime(customer: Customer): SimulationTime =
