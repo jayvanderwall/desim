@@ -15,11 +15,8 @@ type
     received: seq[(int, SimulationTime)]
 
 
-proc newTestComponent(sim: Simulator,
-                      events: seq[(int, SimulationTime)]): TestComponent =
-  result = newComponent[TestComponent](sim)
-  result.selfTimer = newTimer[int](sim)
-  result.toSend = events
+proc newTestComponent(events: seq[(int, SimulationTime)]): TestComponent =
+  TestComponent(selfTimer: newTimer[int](), toSend: events)
 
 
 component comp, TestComponent:
@@ -40,7 +37,9 @@ test "Set timers":
 
   var
     sim = newSimulator()
-    comp = newTestComponent(sim, events)
+    comp = newTestComponent(events)
+
+  sim.register comp
 
   sim.run()
 

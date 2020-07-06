@@ -34,6 +34,7 @@ type
     ##
     ## Create a component with links and ports as fields. Then define
     ## its functionality using the ``component`` macro.
+    sim {.cursor.}: Simulator
     nextEvent: SimulationTime
       ## When the next event will occur on this component, or noEvent if no
       ## events are pending.
@@ -45,7 +46,7 @@ type
     ## Base class for links. Messages sent over links may or may not
     ## be copied, so they must be treated as immutable.
     latency: SimulationTime
-    sim {.cursor.}: Simulator
+    comp {.cursor.}: Component
 
   Link*[M] = object of BaseLink
     ## Represent a connection from one component to another. Each link
@@ -72,6 +73,7 @@ type
 
   PortObj[M] = object
     ## Endpoint for messages of type ``M``.
+    comp {.cursor.}: Component
     events: HeapQueue[Event[M]]
 
   Port*[M] = ref PortObj[M]
@@ -80,10 +82,15 @@ type
     ## A Timer allows a component to schedule an event in the future
     ## without using a self-link and port.
     events: HeapQueue[Event[M]]
-    sim {.cursor.}: Simulator
+    comp {.cursor.}: Component
 
   SimulationError* = object of CatchableError
     ## Base exception for all exceptions raised by the simulation.
+
+  ComponentItem = concept x
+    ## Uniform way of addressing ports, links, and timers
+    x.comp is Component
+
 
 const noEvent = SimulationTime(-1)
 
@@ -94,6 +101,18 @@ const noEvent = SimulationTime(-1)
 method runComponent*(comp: Component, sim: Simulator, isStartup = false, isShutdown = false) {.base,locks:"unknown".};
 
 method updateNextEvent(comp: Component) {.base.};
+
+template setBackPointers*(c: Component, sim: Simulator) =
+  ## Set the component's simulator reference to sim and all the ports,
+  ## links, and timers to have a reference to comp.
+  # TODO: Don't export this
+  c.sim = sim
+  for name, value in fieldPairs(c[]):
+    when value is ComponentItem:
+      value.comp = c
+    when value is seq[ComponentItem]:
+      for v in mitems(value):
+        v.comp = c
 
 #
 # Event
@@ -125,21 +144,12 @@ proc currentTime*(sim: Simulator): SimulationTime =
   return sim.currentTime
 
 
-# Forward definitions
-proc connect[M](link: var Link[M], port: Port[M], sim: Simulator)
-proc connect[M](link: var BcastLink[M], port: Port[M], sim: Simulator)
-
-
-proc connect*[M; L: BaseLink](sim: Simulator, fromComp: Component, link: var L, toComp: Component, port: Port[M]) =
-  ## Connect a link and a port.
-  link.connect port, sim
-
-
-proc register(sim: Simulator, comp: Component) =
+proc register*[C](sim: Simulator, comp: C) =
   ## Register a component with the simulator. Must be called before
-  ## ``run``.
+  ## ``run``. Unregistered components can also not be connected.
 
   sim.components.add comp
+  comp.setBackPointers sim
 
 
 proc keepGoing(sim: Simulator): bool =
@@ -208,6 +218,7 @@ proc addEvent[M](port: var Port[M], event: sink Event[M]) =
 
   port.events.push event
 
+
 proc nextEventTime*[M](port: Port[M]): SimulationTime =
   ## Return the earliest event time of all events pending on this
   ## port.
@@ -215,6 +226,7 @@ proc nextEventTime*[M](port: Port[M]): SimulationTime =
     return noEvent
   else:
     return port.events[0].time
+
 
 iterator messages*[M](port: Port[M], time: SimulationTime): M =
   ## Iterate over all message in this port that happen at this time
@@ -228,10 +240,6 @@ iterator messages*[M](port: Port[M], time: SimulationTime): M =
 # BaseLink
 #
 
-proc connect[M](link: var BaseLink, port: Port[M], sim: Simulator) =
-  link.sim = sim
-
-
 proc latency*(link: BaseLink): SimulationTime =
   ## The minimum latency of messages sent on this link.
   return link.latency
@@ -240,18 +248,16 @@ proc latency*(link: BaseLink): SimulationTime =
 # Link
 #
 
-proc baseNewLink*[M; T: Link[M]=Link[M]](sim: Simulator, latency: SimulationTime):
-                T =
-  ## Create a new ``Link`` with a minimum latency. Optional second
-  ## generic argument can be used to create derived instances.
-  # The other fields are set when connected
+proc baseNewLink*[M; T: Link[M]=Link[M]](latency: SimulationTime): T =
+  ## Create a new ``Link`` with a minimum latency.
   if latency <= 0:
     raise newException(SimulationError, "Invalid link latency " & $latency)
-  return T(sim: sim, latency: latency)
+  # The other fields are set when connected
+  return T(latency: latency)
 
 
-proc newLink*[M](sim: Simulator, latency: SimulationTime): Link[M] =
-  return baseNewLink[M, Link[M]](sim, latency)
+proc newLink*[M](latency: SimulationTime): Link[M] =
+  return baseNewLink[M, Link[M]](latency)
 
 
 proc send*[M](link: var Link[M], msg: M, extraDelay=0) =
@@ -272,26 +278,25 @@ proc send*[M](link: var Link[M], msg: M, extraDelay=0) =
   let
     totalLatency = link.latency + extraDelay
     event = Event[M](msg: msg,
-                     time: link.sim.currentTime + totalLatency)
+                     time: link.comp.sim.currentTime + totalLatency)
 
   link.port.addEvent event
 
 
-proc connect[M](link: var Link[M], port: Port[M], sim: Simulator) =
-  connect BaseLink(link), port, sim
+proc connect[M](link: var Link[M], port: Port[M]) =
   link.port = port
 
 #
 # BcastLink
 #
 
-proc newBcastLink*[M](sim: Simulator, latency: SimulationTime): BcastLink[M] =
+proc newBcastLink*[M](latency: SimulationTime): BcastLink[M] =
   ## Create a new ``BcastLink`` with a minimum latency.
   # The other fields are set when connected
   if latency <= 0:
     raise newException(SimulationError, "Invalid link latency " & $latency)
 
-  return BcastLink[M](sim: sim, latency: latency)
+  return BcastLink[M](latency: latency)
 
 
 proc send*[M](link: var BcastLink[M], msg: M, extraDelay=0) =
@@ -304,7 +309,7 @@ proc send*[M](link: var BcastLink[M], msg: M, extraDelay=0) =
   ## Unlike a ``Link``, it is not an error to send to an unconnected
   ## ``BcastLink``.
 
-  if link.sim == nil:
+  if link.ports.len == 0:
     # This means no connections were made
     return
 
@@ -314,33 +319,32 @@ proc send*[M](link: var BcastLink[M], msg: M, extraDelay=0) =
   let
     totalLatency = link.latency + extraDelay
     event = Event[M](msg: msg,
-                     time: link.sim.currentTime + totalLatency)
+                     time: link.comp.sim.currentTime + totalLatency)
 
   for port in mitems(link.ports):
     port.addEvent event
 
-proc connect[M](link: var BcastLink[M], port: Port[M], sim: Simulator) =
-  connect BaseLink(link), port, sim
+proc connect[M](link: var BcastLink[M], port: Port[M]) =
   link.ports.add port
 
 #
 # BatchLink
 #
 
-proc newBatchLink*[M](sim: Simulator): BatchLink[M] =
+proc newBatchLink*[M](): BatchLink[M] =
   ## Create a new BatchLink. The simulator framework will determine
   ## the latency.
   # Until we have multi-threading or processing on different ranks or
   # compute nodes there isn't much benefit to having anything other
   # than a 1 tick delay.
-  return baseNewLink[M, BatchLink[M]](sim, 1)
+  return baseNewLink[M, BatchLink[M]](1)
 
 #
 # Timer
 #
 
-proc newTimer*[M](sim: Simulator): Timer[M] =
-  return Timer[M](sim: sim)
+proc newTimer*[M](): Timer[M] =
+  return Timer[M]()
 
 
 proc set*[M](timer: var Timer[M], msg: M, delay: SimulationTime) =
@@ -348,7 +352,7 @@ proc set*[M](timer: var Timer[M], msg: M, delay: SimulationTime) =
   if delay <= 0:
     raise newException(SimulationError, "Timer delay must be > 0")
   let
-    time = timer.sim.currentTime + delay
+    time = timer.comp.sim.currentTime + delay
   timer.events.push Event[M](msg: msg, time: time)
 
 
@@ -370,16 +374,21 @@ proc nextEventTime*[M](timer: Timer[M]): SimulationTime =
     return timer.events[0].time
 
 #
-# Component
+# Connected Component
 #
 
+proc connect*[L: BaseLink, M](link: var L, port: Port[M]) =
+  ## Connect a link and a port.
+  if link.comp == nil or port.comp == nil:
+    raise newException(SimulationError, "Register components before connecting")
+  if link.comp.sim != port.comp.sim:
+    raise newException(SimulationError,
+                       "Cannot connect components with different simulators")
+  link.connect port
 
-proc newComponent*[T: Component](sim: Simulator): T =
-  ## Create a new component of the correct subtype. It will be
-  ## registered with the simulator.
-  result = T()
-  sim.register result
-
+#
+# Component
+#
 
 method runComponent*(comp: Component, sim: Simulator, isStartup = false, isShutdown = false) {.base,locks:"unknown".} =
   ## Base method for the implementations of each component. This is

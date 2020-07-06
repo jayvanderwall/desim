@@ -64,8 +64,7 @@ type
     ## at the same time, but they may be separated by as little as one
     ## second.
     line: Link[Customer]
-    arrivalLink: Link[bool]  # The message type is not used
-    arrivalPort: Port[bool]
+    arrival: Timer[bool]  # The message type is not used
 
     # Random variables determining the behavior of new customers.
     meanArrival: alea.Poisson
@@ -75,20 +74,14 @@ type
     nextCustomerId: int
     shutdownTime: SimulationTime
 
-proc newEntrance(sim: Simulator,
-                 meanArrival: Poisson,
+proc newEntrance(meanArrival: Poisson,
                  hasBags: Choice[bool],
                  hasIssues: Choice[bool],
                  shutdownTime: SimulationTime): Entrance =
   ## Create a new Entrance using default latencies.
-  result = newComponent[Entrance](sim)
-  result.line = newLink[Customer](sim, entranceToLine)
-  result.arrivalLink = newLink[bool](sim, 1)
-  result.arrivalPort = newPort[bool]()
-  result.meanArrival = meanArrival
-  result.hasBags = hasBags
-  result.hasIssues = hasIssues
-  result.shutdownTime = shutdownTime
+  Entrance(line: newLink[Customer](entranceToLine),
+           arrival: newTimer[bool](), meanArrival: meanArrival,
+           hasBags: hasBags, hasIssues: hasIssues, shutdownTime: shutdownTime)
 
 
 proc makeCustomer(ent: Entrance, time: Simulationtime): Customer =
@@ -104,10 +97,10 @@ proc makeCustomer(ent: Entrance, time: Simulationtime): Customer =
   ent.nextCustomerId += 1
 
 
-proc getNextArrivalTime(ent: Entrance, linkOffset: SimulationTime): SimulationTime =
+proc getNextArrivalTime(ent: Entrance): SimulationTime =
   ## Return the next arrival time by sampling from the defined
   ## distribution.
-  return SimulationTime(rnd.sample(ent.meanArrival))
+  return SimulationTime(rnd.sample(ent.meanArrival) + 1)
 
 
 component comp, Entrance:
@@ -115,21 +108,18 @@ component comp, Entrance:
   useSimulator sim
 
   startup:
-    # Queue the first self-message that prompts the Entrance to create
-    # more customers.
-    sim.connect(comp, comp.arrivalLink, comp, comp.arrivalPort)
-    comp.arrivalLink.send true, comp.getNextArrivalTime(comp.arrivalLink.latency)
+    comp.arrival.set true, comp.getNextArrivalTime()
 
-  onMessage comp.arrivalPort, _:
-    # We receive a message whenever a new customer is due to
+  onTimer comp.arrival, _:
+    # This timer is set for whenever a new customer is due to
     # arrive. Create the customer, then figure out when the next one
     # arrives, and reschedule this handler.
     let cust = comp.makeCustomer sim.currentTime
     comp.line.send cust
 
-    # Schedule this message handler again
+    # Schedule this timer again
     if sim.currentTime <= comp.shutdownTime:
-      comp.arrivalLink.send true, comp.getNextArrivalTime(comp.arrivalLink.latency)
+      comp.arrival.set true, comp.getNextArrivalTime()
 
 #
 # Define Line component
@@ -146,13 +136,12 @@ type
     customers: Deque[Customer]
     readyCounters: seq[int]
 
-proc newLine(sim: Simulator): Line =
+proc newLine(): Line =
   ## Create a new Line with default objects
-  result = newComponent[Line](sim)
-  result.customerIn = newPort[Customer]()
-  result.customerOut = newBcastLink[(Customer, int)](sim, lineToCounter)
-  result.counterReady = newPort[int]()
-  result.customers = initDeque[Customer]()
+  Line(customerIn: newPort[Customer](),
+       customerOut: newBcastLink[(Customer, int)](lineToCounter),
+       counterReady: newPort[int](),
+       customers: initDeque[Customer]())
 
 
 proc sendCustomers(line: Line) =
@@ -194,11 +183,10 @@ type
     index: int
 
 
-proc newCounter(sim: Simulator, index: int): Counter =
-  result = newComponent[Counter](sim)
-  result.customerIn = newPort[(Customer, int)]()
-  result.ready = newLink[int](sim, baseCustomerTime)
-  result.index = index
+proc newCounter(index: int): Counter =
+  Counter(customerIn: newPort[(Customer, int)](),
+          ready: newLink[int](baseCustomerTime),
+          index: index)
 
 
 proc calculateExtraWaitTime(customer: Customer): SimulationTime =
@@ -256,19 +244,22 @@ proc main() =
     hasIssues = alea.choice([true, false, false, false, false, false])
 
     sim = newSimulator()
-    ent = newEntrance(sim,
-                      meanArrival,
+    ent = newEntrance(meanArrival,
                       hasBags,
                       hasIssues,
                       simulationDuration)
-    line = newLine(sim)
+    line = newLine()
 
-  sim.connect(ent, ent.line, line, line.customerIn)
+  sim.register ent
+  sim.register line
+
+  connect(ent.line, line.customerIn)
 
   for i in 0..<1:
-    var counter = newCounter(sim, i)
-    sim.connect(line, line.customerOut, counter, counter.customerIn)
-    sim.connect(counter, counter.ready, line, line.counterReady)
+    var counter = newCounter(i)
+    sim.register counter
+    connect(line.customerOut, counter.customerIn)
+    connect(counter.ready, line.counterReady)
 
   echo "Running simulation"
   sim.run()

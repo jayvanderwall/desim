@@ -18,18 +18,14 @@ type
     selfPort: Port[bool]
 
 
-proc newTestSelfComponent(sim: Simulator): TestSelfComponent =
-  result = newComponent[TestSelfComponent](sim)
-  var link = newLink[bool](sim, 1)
-  result.selfLink = link
-  result.selfPort = newPort[bool]()
+proc newTestSelfComponent(): TestSelfComponent =
+  TestSelfComponent(selfLink: newLink[bool](1), selfPort: newPort[bool]())
 
 
 component comp, TestSelfComponent:
   useSimulator sim
 
   startup:
-    sim.connect(comp, comp.selfLink, comp, comp.selfPort)
     comp.selfLink.send(true)
 
   onMessage comp.selfPort, msg:
@@ -42,11 +38,14 @@ test "Component with self loop":
     sim = newSimulator()
 
   let
-    testComp = newTestSelfComponent(sim)
+    comp = newTestSelfComponent()
+
+  sim.register comp
+  connect(comp.selfLink, comp.selfPort)
 
   sim.run()
 
-  check(testComp.counter == 1)
+  check(comp.counter == 1)
 
 
 #
@@ -64,16 +63,12 @@ type
     recvPort: Port[int]
 
 
-proc newTestSendComponent(sim: Simulator, msg: int): TestSendComponent =
-  result = newComponent[TestSendComponent](sim)
-  result.msg = msg
-  var link = newLink[int](sim, 1)
-  result.sendLink = link
+proc newTestSendComponent(msg: int): TestSendComponent =
+  TestSendComponent(msg: msg, sendLink: newLink[int](1))
 
 
-proc newTestRecvComponent(sim: Simulator): TestRecvComponent =
-  result = newComponent[TestRecvComponent](sim)
-  result.recvPort = newPort[int]()
+proc newTestRecvComponent(): TestRecvComponent =
+  TestRecvComponent(recvPort: newPort[int]())
 
 
 component comp, TestSendComponent:
@@ -91,10 +86,12 @@ test "Two Components communicating":
     sim = newSimulator()
 
   let
-    sendComp = newTestSendComponent(sim, 42)
-    recvComp = newTestRecvComponent(sim)
+    sendComp = newTestSendComponent(42)
+    recvComp = newTestRecvComponent()
 
-  sim.connect(sendComp, sendComp.sendLink, recvComp, recvComp.recvPort)
+  sim.register sendComp
+  sim.register recvComp
+  connect(sendComp.sendLink, recvComp.recvPort)
 
   sim.run()
 
@@ -114,17 +111,12 @@ type
     recvPort: Port[int]
 
 
-proc newMultiMessageSend(sim: Simulator, msgs: seq[(int, SimulationTime)]):
-                        MultiMessageSend =
-  result = newComponent[MultiMessageSend](sim)
-  result.msgs = msgs
-  var link = newLink[int](sim, 1)
-  result.sendLink = link
+proc newMultiMessageSend(msgs: seq[(int, SimulationTime)]): MultiMessageSend =
+  MultiMessageSend(msgs: msgs, sendLink: newLink[int](1))
 
 
-proc newMultiMessageRecv(sim: Simulator): MultiMessageRecv =
-  result = newComponent[MultiMessageRecv](sim)
-  result.recvPort = newPort[int]()
+proc newMultiMessageRecv(): MultiMessageRecv =
+  MultiMessageRecv(recvPort: newPort[int]())
 
 
 component comp, MultiMessageSend:
@@ -142,10 +134,12 @@ test "Multiple messages different delays":
     sim = newSimulator()
 
   let
-    sender = newMultiMessageSend(sim, @[(1, 0), (2, 5), (3, 25)])
-    receiver = newMultiMessageRecv(sim)
+    sender = newMultiMessageSend(@[(1, 0), (2, 5), (3, 25)])
+    receiver = newMultiMessageRecv()
 
-  sim.connect(sender, sender.sendLink, receiver, receiver.recvPort)
+  sim.register sender
+  sim.register receiver
+  connect(sender.sendLink, receiver.recvPort)
 
   sim.run()
 
@@ -162,11 +156,8 @@ type
     sendLink: BcastLink[int]
 
 
-proc newTestBcastComponent(sim: Simulator, msg: int): TestBcastComponent =
-  result = newComponent[TestBcastComponent](sim)
-  result.msg = msg
-  var link = newBcastLink[int](sim, 1)
-  result.sendLink = link
+proc newTestBcastComponent(msg: int): TestBcastComponent =
+  TestBcastComponent(msg: msg, sendLink: newBcastLink[int](1))
 
 
 component comp, TestBcastComponent:
@@ -177,14 +168,16 @@ component comp, TestBcastComponent:
 test "Broadcast to two components":
   var sim = newSimulator()
   let
-    sender = newTestBcastComponent(sim, 42)
+    sender = newTestBcastComponent(42)
     receivers = [
-      newTestRecvComponent(sim),
-      newTestRecvComponent(sim)
+      newTestRecvComponent(),
+      newTestRecvComponent()
     ]
 
+  sim.register sender
   for receiver in receivers:
-    sim.connect(sender, sender.sendLink, receiver, receiver.recvPort)
+    sim.register receiver
+    connect(sender.sendLink, receiver.recvPort)
 
   sim.run()
 
@@ -203,12 +196,9 @@ type
     sent: seq[(int, int)]
 
 
-proc newRandomComponent(sim: Simulator, total: int, index: int): RandomComponent =
-  result = newComponent[RandomComponent](sim)
-  result.input = newPort[int]()
-  #result.outs = toSeq(0..<total).map(_ => newLink[int](sim, 1)
-  result.outs = collect(newSeq):
-    for _ in 0..<total: newLink[int](sim, 1)
+proc newRandomComponent(total: int, index: int): RandomComponent =
+  RandomComponent(input: newPort[int](),
+                  outs: toSeq(0..<total).map(_ => newLink[int](1)))
 
 
 component comp, RandomComponent:
@@ -234,7 +224,9 @@ test "Random Communication between many components":
     count = rand(3..20)
 
   for i in 0..<count:
-    comps.add newRandomComponent(sim, count, i)
+    var comp = newRandomComponent(count, i)
+    sim.register comp
+    comps.add comp
 
   for i in 0..<count:
     for j in i..<count:
@@ -242,8 +234,7 @@ test "Random Communication between many components":
         ii = i
         jj = j
       for k in 1..2:
-        sim.connect(comps[ii], comps[ii].outs[jj],
-                    comps[jj], comps[jj].input)
+        connect(comps[ii].outs[jj], comps[jj].input)
         swap(ii, jj)
 
   sim.run()
@@ -270,11 +261,8 @@ type
     index: int
 
 
-proc newTestBatchLinkComponent(sim: Simulator): TestBatchLinkComponent =
-  result = newComponent[TestBatchLinkComponent](sim)
-  var link = newBatchLink[int](sim)
-  result.link = link
-  result.timer = newTimer[bool](sim)
+proc newTestBatchLinkComponent(): TestBatchLinkComponent =
+  TestBatchLinkComponent(link: newBatchLink[int](), timer: newTimer[bool]())
 
 
 component comp, TestBatchLinkComponent:
@@ -293,10 +281,12 @@ component comp, TestBatchLinkComponent:
 test "Batch Link":
   var
     sim = newSimulator()
-    testBatch = newTestBatchLinkComponent(sim)
-    testRecv = newMultiMessageRecv(sim)
+    testBatch = newTestBatchLinkComponent()
+    testRecv = newMultiMessageRecv()
 
-  sim.connect(testBatch, testBatch.link, testRecv, testRecv.recvPort)
+  sim.register testBatch
+  sim.register testRecv
+  connect(testBatch.link, testRecv.recvPort)
 
   let count = rand(1..10)
   testBatch.msgs = toSeq(1..count).map(_ => rand(-10..10))
