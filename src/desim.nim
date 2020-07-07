@@ -474,3 +474,13 @@ macro component*(comp: untyped, ComponentType: untyped, body: untyped): untyped 
       let `simTime` = `simulatorSym`.currentTime
       `body`
     {.pop.}
+
+
+proc `comp=`*[I: BaseLink|Timer|Port](item: var I, comp: Component) =
+    ## Set the Component backpointer for a port, link, or timer. This
+    ## is normally not necessary, but if an item is stored in an
+    ## unusual way (i.e. not a field or inside a seq) then this must
+    ## be called manually before connecting the item.
+    if item.comp != nil:
+      raise newException(SimulationError, "Component already set")
+    item.comp = comp

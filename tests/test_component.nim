@@ -297,3 +297,41 @@ test "Batch Link":
 
   for (expMsg, actMsgTuple) in zip(testBatch.msgs, testRecv.msgs):
     check(expMsg == actMsgTuple[0])
+
+#
+# Component with an indirect link
+#
+
+type
+  IndirectLinkComponent = ref object of Component
+    ## This component contains a link that will not automatically have
+    ## its back reference set.
+    link: (Link[int], int)
+
+
+proc newIndirectLinkComponent(value: int): IndirectLinkComponent =
+  IndirectLinkComponent(link: (newLink[int](1), value))
+
+
+component comp, IndirectLinkComponent:
+  startup:
+    comp.link[0].send comp.link[1]
+
+
+test "Component with indirect link":
+  var
+    sim = newSimulator()
+    expMessage = 7
+    sender = newIndirectLinkComponent(expMessage)
+    receiver = newTestRecvComponent()
+
+  sim.register sender
+  sim.register receiver
+
+  sender.link[0].comp = sender
+
+  connect(sender.link[0], receiver.recvPort)
+
+  sim.run()
+
+  check(expMessage == receiver.msg)
