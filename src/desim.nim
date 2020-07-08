@@ -89,7 +89,7 @@ type
 
   ComponentItem = concept x
     ## Uniform way of addressing ports, links, and timers
-    x.comp is Component
+    `comp=`(x, Component)
 
 
 const noEvent = SimulationTime(-1)
