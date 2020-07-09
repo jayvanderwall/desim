@@ -8,6 +8,7 @@ import strutils
 import strformat
 import sequtils
 import times
+import re
 
 import desim
 
@@ -33,15 +34,24 @@ type
     ## side.
     enabled*: bool
     #TODO: Don't export link
-    link*: BatchLink[LogMessage]
+    link: BatchLink[LogMessage]
     timeFormat*: string
     level*: LogLevel
 
   LoggerRef* = ref Logger
 
-  LoggerBuilder = object
+  LoggerBuilder* = object
     ## Object for creating many Loggers, each possibly sharing
     ## configuration data.
+    ##
+    ## The builder is given various filters. A component may enable or
+    ## disable its own logging at runtime via the Logger.enabled
+    ## variable, but changing logging filters globally after creating
+    ## the Logger objects has no effect.
+    comp: LogComponent
+    level: LogLevel
+    nameRegexs: seq[(Regex, bool)]  # Regex and whether to enable on match
+    timeFormat: string
 
   LoggableObject* = concept lo
     ## Generic way to refer to an object that can be logged. Here
@@ -76,6 +86,66 @@ component comp, LogComponent:
     comp.write msg
 
 #
+# LoggerBuilder
+#
+
+proc newLoggerBuilder*(comp: LogComponent): LoggerBuilder =
+  ## Create a new logger builder for connecting components to a
+  ## central logging component. Call methods on this object to
+  ## configure loggers, then build to create one.
+  return LoggerBuilder(comp: comp, timeFormat: "yyyy-MMM-dd hh:mm:ss",
+                       level: LogLevel.info)
+
+
+proc setLevel*(builder: var LoggerBuilder, level: LogLevel) =
+  ## Set the level filter so that this level and lower all are sent to
+  ## the logger.
+  builder.level = level
+
+
+proc enableNameRegex*(builder: var LoggerBuilder, regex: Regex) =
+  ## Add a regular expression. If a component's name matches this
+  ## regular expression, it will have logging enabled. If no regex's
+  ## are given, then all are enabled. The first match of enable or
+  ## disable regex's determines the behavior for a given component,
+  ## i.e. order matters.
+  builder.nameRegexs.add (regex, true)
+
+
+proc disableNameRegex*(builder: var LoggerBuilder, regex: Regex) =
+  ## Add a regular expression. If a component's name matches this
+  ## regular expression, it will have logging disabled. If no regex's
+  ## are given, then all are enabled. The first match of enable or
+  ## disable regex's determines the behavior for a given component,
+  ## i.e. order matters.
+  builder.nameRegexs.add (regex, false)
+
+
+proc setTimeFormat*(builder: var LoggerBuilder, format: string) =
+  ## Set the time format string that all the loggers will use. By
+  ## default chooses something reasonable.
+  builder.timeFormat = format
+
+
+proc checkEnabled*(builder: LoggerBuilder, name: string): bool = 
+  ## Return whether building a Logger for a component with the given
+  ## name defaults to enabling logging.
+  if builder.nameRegexs.len == 0:
+    return true
+  for (regex, enable) in builder.nameRegexs:
+    if match(name, regex):
+      return enable
+  return false
+  
+
+proc build*(builder: LoggerBuilder, name: string): Logger =
+  ## Build a logger according to the options set in this builder.
+  Logger(enabled: builder.checkEnabled(name),
+         link: newBatchLink[LogMessage](),
+         timeFormat: builder.timeFormat,
+         level: builder.level)
+
+#
 # Logger
 #
 
@@ -83,6 +153,10 @@ proc `comp=`*(logger: var Logger, comp: Component) =
   ## This fulfills the ComponentItem concept and allows us to
   ## intialize the port.
   logger.link.comp = comp
+
+
+proc link*(logger: var Logger): var BatchLink[LogMessage] =
+  logger.link
 
 
 proc formatCurrentTime(logger: Logger): string =
@@ -99,9 +173,29 @@ proc log*(logger: var Logger, level: string, msg: string, fields: varargs[(strin
 
 
 template toStringField(field: (string, LoggableObject)): (string, string) =
+  ## Convert a tuple with a string key and LoggableObject value to a
+  ## pair of strings. The level templates will run this conversion,
+  ## but the compiler will wait until the last moment to do the
+  ## conversion, so it will not happen unless the filters pass.
   (field[0], $field[1])
 
 
 template error*(logger: var Logger, msg: string, fields: varargs[(string, string), toStringField]) =
   if logger.enabled and logger.level >= LogLevel.error:
     logger.log($LogLevel.error, msg, fields)
+
+template warning*(logger: var Logger, msg: string, fields: varargs[(string, string), toStringField]) =
+  if logger.enabled and logger.level >= LogLevel.warning:
+    logger.log($LogLevel.warning, msg, fields)
+
+template info*(logger: var Logger, msg: string, fields: varargs[(string, string), toStringField]) =
+  if logger.enabled and logger.level >= LogLevel.info:
+    logger.log($LogLevel.info, msg, fields)
+
+template debug*(logger: var Logger, msg: string, fields: varargs[(string, string), toStringField]) =
+  if logger.enabled and logger.level >= LogLevel.debug:
+    logger.log($LogLevel.debug, msg, fields)
+
+template trace*(logger: var Logger, msg: string, fields: varargs[(string, string), toStringField]) =
+  if logger.enabled and logger.level >= LogLevel.trace:
+    logger.log($LogLevel.trace, msg, fields)
