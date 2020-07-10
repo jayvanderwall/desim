@@ -34,6 +34,7 @@ type
     ##
     ## Create a component with links and ports as fields. Then define
     ## its functionality using the ``component`` macro.
+    name: string
     sim {.cursor.}: Simulator
     nextEvent: SimulationTime
       ## When the next event will occur on this component, or noEvent if no
