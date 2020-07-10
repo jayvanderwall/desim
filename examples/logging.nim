@@ -9,28 +9,25 @@ type
     logger: Logger
 
 
-proc newExampleComponent(logbuilder: LoggerBuilder, name: string): ExampleComponent =
-  ExampleComponent(logger: logbuilder.build(name))
+proc newExampleComponent(name: string): ExampleComponent =
+  ExampleComponent(name: name)
 
 
 component comp, ExampleComponent:
   startup:
-    comp.logger.error("Log Test")
+    comp.logger.error("Log Test", ("data", 42), ("escape", "\t\x12\n\""), ("good?", true))
 
 proc main() =
 
   var
     sim = newSimulator()
     logcomp = newLogComponent()
-
-  var
+    comp = newExampleComponent("example")
     logbuilder = newLoggerBuilder(logcomp)
 
-  logbuilder.disableNameRegex re"abc.*"
-
-  var
-    comp = newExampleComponent(logbuilder, "example")
-
+  logbuilder.enableNameRegex re"ex.*"
+  logbuilder.attach comp
+  
   sim.register comp
   sim.register logcomp
 

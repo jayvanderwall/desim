@@ -9,6 +9,7 @@ import strformat
 import sequtils
 import times
 import re
+import macros
 
 import desim
 
@@ -33,7 +34,6 @@ type
     ## doing logging. It takes care of all filtering at the client
     ## side.
     enabled*: bool
-    #TODO: Don't export link
     link: BatchLink[LogMessage]
     timeFormat*: string
     level*: LogLevel
@@ -70,7 +70,7 @@ type
 
 proc logToStdout(msg: LogMessage) =
   ## Log the given message to standard out.
-  stdout.write "{" & join(msg.fields.mapIt(fmt""""{it[0]}": "{it[1]}""""), ", ") &
+  stdout.write "{" & join(msg.fields.mapIt(fmt"""{escape(it[0])}: {escape(it[1])}"""), ", ") &
     "}"
 
 
@@ -136,7 +136,7 @@ proc checkEnabled*(builder: LoggerBuilder, name: string): bool =
     if match(name, regex):
       return enable
   return false
-  
+
 
 proc build*(builder: LoggerBuilder, name: string): Logger =
   ## Build a logger according to the options set in this builder.
@@ -144,6 +144,17 @@ proc build*(builder: LoggerBuilder, name: string): Logger =
          link: newBatchLink[LogMessage](),
          timeFormat: builder.timeFormat,
          level: builder.level)
+
+
+macro attach*(builder: LoggerBuilder, comp: Component, fieldName: static[string] = "logger") =
+  ## Convenience wrapper around the ``build`` proc to add a logger to
+  ## a ``Component``. By default expects the field to be named
+  ## ``logger``.
+  let fieldIdent = newIdentNode(fieldName)
+  result = quote do:
+    # Do this in 2 steps to avoid ObservableStore warning
+    let built = `builder`.build(`comp`.name)
+    `comp`.`fieldIdent` = built
 
 #
 # Logger
@@ -172,7 +183,7 @@ proc log*(logger: var Logger, level: string, msg: string, fields: varargs[(strin
   logger.link.send logMessage
 
 
-template toStringField(field: (string, LoggableObject)): (string, string) =
+template toStringField*(field: (string, LoggableObject)): (string, string) =
   ## Convert a tuple with a string key and LoggableObject value to a
   ## pair of strings. The level templates will run this conversion,
   ## but the compiler will wait until the last moment to do the
