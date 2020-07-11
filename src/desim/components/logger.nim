@@ -10,6 +10,7 @@ import sequtils
 import times
 import re
 import macros
+import options
 
 import desim
 
@@ -65,6 +66,16 @@ type
     none, error, warning, info, debug, trace, all
 
 #
+# LogMessage
+#
+
+proc find*(msg: LogMessage, key: string): Option[string] =
+  ## Return the value corresponding to the given key if it exists.
+  for (mkey, value) in msg.fields:
+    if mkey == key:
+      return some value
+
+#
 # LogComponent
 #
 
@@ -74,10 +85,10 @@ proc logToStdout(msg: LogMessage) =
     "}"
 
 
-proc newLogComponent*(write = logToStdout): LogComponent =
+proc newLogComponent*(name = "logger", write: proc (msg: LogMessage) = logToStdout): LogComponent =
   ## Create a new LogComponent. By default write all log entries it
   ## receives to stdout.
-  LogComponent(port: newPort[LogMessage](), write: write)
+  LogComponent(name: name, port: newPort[LogMessage](), write: write)
 
 
 component comp, LogComponent:
