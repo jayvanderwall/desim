@@ -31,8 +31,6 @@ proc main() =
   sim.register comp
   sim.register logcomp
 
-  connect(comp.logger.link, logcomp.port)
-
   sim.run
 
 main()

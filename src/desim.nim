@@ -380,11 +380,14 @@ proc nextEventTime*[M](timer: Timer[M]): SimulationTime =
 
 proc connect*[L: BaseLink, M](link: var L, port: Port[M]) =
   ## Connect a link and a port.
-  if link.comp == nil or port.comp == nil:
-    raise newException(SimulationError, "Register components before connecting")
-  if link.comp.sim != port.comp.sim:
-    raise newException(SimulationError,
-                       "Cannot connect components with different simulators")
+
+  if link.comp != nil and port.comp != nil:
+    if link.comp.sim != port.comp.sim:
+      raise newException(SimulationError,
+                         "Cannot connect components with different simulators")
+
+  # Note: This doesn't recurse because in this context the other
+  # connect procs are more specific that the one we're in.
   link.connect port
 
 #
@@ -482,6 +485,6 @@ proc `comp=`*[I: BaseLink|Timer|Port](item: var I, comp: Component) =
     ## is normally not necessary, but if an item is stored in an
     ## unusual way (i.e. not a field or inside a seq) then this must
     ## be called manually before connecting the item.
-    if item.comp != nil:
+    if item.comp != nil and item.comp != comp:
       raise newException(SimulationError, "Component already set")
     item.comp = comp

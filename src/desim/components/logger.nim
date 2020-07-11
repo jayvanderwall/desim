@@ -160,12 +160,15 @@ proc build*(builder: LoggerBuilder, name: string): Logger =
 macro attach*(builder: LoggerBuilder, comp: Component, fieldName: static[string] = "logger") =
   ## Convenience wrapper around the ``build`` proc to add a logger to
   ## a ``Component``. By default expects the field to be named
-  ## ``logger``.
+  ## ``logger``. This will also connect to the logging component. It
+  ## can be run before or after registering the components.
   let fieldIdent = newIdentNode(fieldName)
   result = quote do:
     # Do this in 2 steps to avoid ObservableStore warning
     let built = `builder`.build(`comp`.name)
     `comp`.`fieldIdent` = built
+    `comp`.`fieldIdent`.comp = `comp`
+    connect(`comp`.`fieldIdent`.link, `builder`.comp.port)
 
 #
 # Logger
