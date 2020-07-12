@@ -104,8 +104,6 @@ proc getNextArrivalTime(ent: Entrance): SimulationTime =
 
 
 component comp, Entrance:
-  # Indicate that we will refer to the simulator as `sim`
-  useSimulator sim
 
   startup:
     comp.arrival.set true, comp.getNextArrivalTime()
@@ -114,11 +112,11 @@ component comp, Entrance:
     # This timer is set for whenever a new customer is due to
     # arrive. Create the customer, then figure out when the next one
     # arrives, and reschedule this handler.
-    let cust = comp.makeCustomer sim.currentTime
+    let cust = comp.makeCustomer simulator.currentTime
     comp.line.send cust
 
     # Schedule this timer again
-    if sim.currentTime <= comp.shutdownTime:
+    if simulator.currentTime <= comp.shutdownTime:
       comp.arrival.set true, comp.getNextArrivalTime()
 
 #
@@ -153,7 +151,6 @@ proc sendCustomers(line: Line) =
     line.customerOut.send (cust, counter)
 
 component comp, Line:
-  useSimulator sim
 
   echo "line.customerIn.len: ", comp.customerIn.events.len
 
@@ -161,7 +158,7 @@ component comp, Line:
     var
       customer = customer
     echo "New customer in line"
-    customer.enterLineTime = sim.currentTime  
+    customer.enterLineTime = simulator.currentTime  
     comp.customers.addLast customer
 
   onMessage comp.counterReady, counter:
@@ -214,7 +211,6 @@ proc display(customer: Customer) =
 
 
 component comp, Counter:
-  useSimulator sim
 
   startup:
     comp.ready.send comp.index
@@ -228,8 +224,8 @@ component comp, Counter:
 
     if index == comp.index:
       echo "Customer at counter ", comp.index
-      customer.enterCounterTime = sim.currentTime
-      customer.leaveSimTime = sim.currentTime + comp.ready.latency + extra
+      customer.enterCounterTime = simulator.currentTime
+      customer.leaveSimTime = simulator.currentTime + comp.ready.latency + extra
       comp.ready.send comp.index, extra
       customer.display
 

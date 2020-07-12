@@ -23,7 +23,6 @@ proc newTestSelfComponent(): TestSelfComponent =
 
 
 component comp, TestSelfComponent:
-  useSimulator sim
 
   startup:
     comp.selfLink.send(true)
@@ -125,9 +124,8 @@ component comp, MultiMessageSend:
       comp.sendLink.send(msg[0], msg[1])
 
 component comp, MultiMessageRecv:
-  useSimulator sim
   onMessage comp.recvPort, msg:
-    comp.msgs.add (msg, sim.currentTime - 1)
+    comp.msgs.add (msg, simulator.currentTime - 1)
 
 test "Multiple messages different delays":
   var

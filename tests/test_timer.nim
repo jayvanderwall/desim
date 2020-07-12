@@ -20,14 +20,13 @@ proc newTestComponent(events: seq[(int, SimulationTime)]): TestComponent =
 
 
 component comp, TestComponent:
-  useSimulator sim
 
   startup:
     for msg in comp.toSend:
       comp.selfTimer.set msg[0], msg[1]
 
   onTimer comp.selfTimer, msg:
-    comp.received.add (msg, sim.currentTime)
+    comp.received.add (msg, simulator.currentTime)
 
 
 test "Set timers":

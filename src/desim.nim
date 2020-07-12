@@ -40,9 +40,6 @@ type
       ## When the next event will occur on this component, or noEvent if no
       ## events are pending.
 
-  Message* = ref object of RootObj
-    ## Base class for messages sent over links.
-
   BaseLink* = object of RootObj
     ## Base class for links. Messages sent over links may or may not
     ## be copied, so they must be treated as immutable.
@@ -72,12 +69,10 @@ type
     ## most-efficiently moving simulation metadata such as statistics
     ## or log messages.
 
-  PortObj[M] = object
+  Port*[M] = ref object
     ## Endpoint for messages of type ``M``.
     comp {.cursor.}: Component
     events: HeapQueue[Event[M]]
-
-  Port*[M] = ref PortObj[M]
 
   Timer*[M] = object
     ## A Timer allows a component to schedule an event in the future
@@ -405,6 +400,36 @@ method updateNextEvent(comp: Component) {.base.} =
   discard
 
 
+template startup*(startupBody: untyped): untyped {.dirty.} =
+  ## Use inside a ``component`` block to create an action that is run
+  ## exactly once before the component starts processing messages.
+  if desim_isStartup:
+    startupBody
+
+
+template shutdown*(shutdownBody: untyped): untyped {.dirty.} =
+  ## Use inside a ``component`` block to create an action that is run
+  ## exactly once immediatly before a component ceases processing.
+  if desim_isShutdown:
+    shutdownBody
+
+
+template onTimer*(timer: typed, msgName: untyped, onMessageBody: untyped): untyped {.dirty.} =
+  block:
+    if not desim_isShutdown and not desim_isStartup:
+      for msgName in timer.messages simulator.currentTime:
+        onMessageBody
+    desim_component.nextEvent = update(desim_component.nextEvent, nextEventTime(timer))
+
+
+template onMessage*(port: typed, msgName: untyped, onMessageBody: untyped): untyped {.dirty.} =
+  block:
+    if not desim_isShutdown and not desim_isStartup:
+      for msgName in port.messages simulator.currentTime:
+        onMessageBody
+    desim_component.nextEvent = update(desim_component.nextEvent, nextEventTime(port))
+
+
 macro component*(comp: untyped, ComponentType: untyped, body: untyped): untyped =
   ## Define a component's behavior. This takes the name you want to
   ## refer to the component as, and the component's type, then
@@ -416,14 +441,18 @@ macro component*(comp: untyped, ComponentType: untyped, body: untyped): untyped 
   ## ``startup`` template is similar and runs on startup. The
   ## ``onMessage`` macro takes a port and a name for the messages and
   ## runs its body for each new message. Similarly ``onTimer`` takes a
-  ## timer and message name and handles timers. ``useSimulator`` can
-  ## be used to declare a name by which you will refer to the
-  ## simulator object in the rest of the component definition.
+  ## timer and message name and handles timers. A variable named
+  ## ``simulator`` is automatically added to the environment and
+  ## refers to the ``Simulator`` type that registered this
+  ## ``Component``.
+  ##
+  ## This macro may also add several variables starting with
+  ## ``desim_`` to the local namespace, so do not start your variables
+  ## with this prefix to avoid collisions.
   ##
   ## Example:
   ## ```nim
   ## component comp, MyComponent:
-  ##   useSimulator sim
   ##   startup:
   ##     comp.myLink.send newMsg("hello")
   ##   shutdown:
@@ -435,12 +464,10 @@ macro component*(comp: untyped, ComponentType: untyped, body: untyped): untyped 
   ## ```
 
   let
-    shutdown = genSym(kind=nskTemplate, ident="shutdown")
-    startup = genSym(kind=nskTemplate, ident="startup")
-    simulatorSym = genSym(kind=nskParam, ident="simulator")
-    simTime = genSym(kind=nskLet, ident="simTime")
-    isShutdown = genSym(kind=nskParam, "isShutdown")
-    isStartup = genSym(kind=nskParam, "isStartup")
+    simulator = ident("simulator")
+    isShutdown = ident("desim_isShutdown")
+    isStartup = ident("desim_isStartup")
+    component = ident("desim_component")
     nextEventTime = bindSym("nextEventTime")
   result = quote do:
     {.push hint[XDeclaredButNotUsed]:off.}
@@ -451,33 +478,14 @@ macro component*(comp: untyped, ComponentType: untyped, body: untyped): untyped 
           `comp`.nextEvent = update(`comp`.nextEvent, value.nextEventTime)
         when value is Timer:
           `comp`.nextEvent = update(`comp`.nextEvent, value.nextEventTime)
-      
-    method runComponent*(`comp`: `ComponentType`, `simulatorSym`: Simulator, `isStartup` = false, `isShutdown` = false) {.locks:"unknown".} =
-      template `shutdown`(shutdownBody: untyped): untyped {.dirty.} =
-        if `isShutdown`:
-          shutdownBody
-      template `startup`(startupBody: untyped): untyped {.dirty.} =
-        if `isStartup`:
-          startupBody
-      template onMessage(port: typed, msgName: untyped, onMessageBody: untyped): untyped {.dirty.} =
-        block:
-          if not `isShutdown` and not `isStartup`:
-            for msgName in port.messages `simTime`:
-              onMessageBody
-          `comp`.nextEvent = update(`comp`.nextEvent, `nextEventTime`(port))
-      template onTimer(timer: typed, msgName: untyped, onMessageBody: untyped): untyped {.dirty.} =
-        block:
-          if not `isShutdown` and not `isStartup`:
-            for msgName in timer.messages `simTime`:
-              onMessageBody
-          `comp`.nextEvent = update(`comp`.nextEvent, `nextEventTime`(timer))
-      template useSimulator(name: untyped): untyped {.dirty.} =
-        var name = `simulatorSym`
 
+    method runComponent*(`comp`: `ComponentType`, `simulator`: Simulator, `isStartup` = false, `isShutdown` = false) {.locks:"unknown".} =
+
+      let `component` = `comp`
       `comp`.nextEvent = noEvent
-      let `simTime` = `simulatorSym`.currentTime
       `body`
     {.pop.}
+  #echo result.repr
 
 
 proc `comp=`*[I: BaseLink|Timer|Port](item: var I, comp: Component) =
