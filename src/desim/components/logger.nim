@@ -92,7 +92,7 @@ proc newLogComponent*(name = "logger", write: proc (msg: LogMessage) = logToStdo
 
 
 component comp, LogComponent:
-  onMessage comp.port, msg:
+  for msg in messages(comp.port):
     # Anything that comes here has already been pre-filtered.
     comp.write msg
 

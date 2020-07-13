@@ -108,7 +108,7 @@ component comp, Entrance:
   startup:
     comp.arrival.set true, comp.getNextArrivalTime()
 
-  onTimer comp.arrival, _:
+  for _ in messages(comp.arrival):
     # This timer is set for whenever a new customer is due to
     # arrive. Create the customer, then figure out when the next one
     # arrives, and reschedule this handler.
@@ -154,14 +154,14 @@ component comp, Line:
 
   echo "line.customerIn.len: ", comp.customerIn.events.len
 
-  onMessage comp.customerIn, customer:
+  for customer in messages(comp.customerIn):
     var
       customer = customer
     echo "New customer in line"
     customer.enterLineTime = simulator.currentTime  
     comp.customers.addLast customer
 
-  onMessage comp.counterReady, counter:
+  for counter in messages(comp.counterReady):
     echo "Counter ", counter, " is ready"
     comp.readyCounters.add counter
 
@@ -215,7 +215,7 @@ component comp, Counter:
   startup:
     comp.ready.send comp.index
 
-  onMessage comp.customerIn, customerPacket:
+  for customerPacket in messages(comp.customerIn):
     # Handle the customer by calculating their wait time and then
     # sending a ready message with that delay.
     var

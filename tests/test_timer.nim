@@ -25,7 +25,7 @@ component comp, TestComponent:
     for msg in comp.toSend:
       comp.selfTimer.set msg[0], msg[1]
 
-  onTimer comp.selfTimer, msg:
+  for msg in messages(comp.selfTimer):
     comp.received.add (msg, simulator.currentTime)
 
 

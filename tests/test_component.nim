@@ -27,7 +27,7 @@ component comp, TestSelfComponent:
   startup:
     comp.selfLink.send(true)
 
-  onMessage comp.selfPort, msg:
+  for msg in messages(comp.selfPort):
     comp.counter += 1
 
 
@@ -76,7 +76,7 @@ component comp, TestSendComponent:
 
 
 component comp, TestRecvComponent:
-  onMessage comp.recvPort, msg:
+  for msg in messages(comp.recvPort):
     comp.msg = msg
 
 
@@ -124,7 +124,7 @@ component comp, MultiMessageSend:
       comp.sendLink.send(msg[0], msg[1])
 
 component comp, MultiMessageRecv:
-  onMessage comp.recvPort, msg:
+  for msg in messages(comp.recvPort):
     comp.msgs.add (msg, simulator.currentTime - 1)
 
 test "Multiple messages different delays":
@@ -209,7 +209,7 @@ component comp, RandomComponent:
     comp.outs[dst].send msg
     comp.sent.add (msg, dst)
 
-  onMessage comp.input, msg:
+  for msg in messages(comp.input):
     comp.received.add msg
 
 
@@ -269,7 +269,7 @@ component comp, TestBatchLinkComponent:
     assert comp.msgs.len > 0, "Please test something"
     comp.timer.set true, rand(1..20)
 
-  onTimer comp.timer, _:
+  for _ in messages(comp.timer):
     comp.link.send comp.msgs[comp.index]
     comp.index += 1
     if comp.index < comp.msgs.len:
