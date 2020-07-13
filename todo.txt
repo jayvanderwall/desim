@@ -6,6 +6,18 @@ statistic publishing
 
 logging
 
+update documentation
+
 documentation command
 
-Make generic component constructor
+Make generic component constructor?
+
+Make naming scheme consistent with component definition templates (all
+with or without on- prefix)
+
+
+Future desirable features
+
+threading
+
+access to pending messages at shutdown

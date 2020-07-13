@@ -50,7 +50,7 @@ type
     ## Represent a connection from one component to another. Each link
     ## is associated with a base latency. All messages sent on this
     ## link have at least that latency, but may have additional
-    ## latency added with the `send proc<#send,Link,Message>`_. This
+    ## latency added with ``send``. This
     ## minimum latency allows the simulation framework to more
     ## efficiently parallelize the components.
     ##
@@ -76,7 +76,8 @@ type
 
   Timer*[M] = object
     ## A Timer allows a component to schedule an event in the future
-    ## without using a self-link and port.
+    ## for itself to handle. This acts like a link and port pair for
+    ## the same component.
     events: HeapQueue[Event[M]]
     comp {.cursor.}: Component
 
@@ -84,7 +85,8 @@ type
     ## Base exception for all exceptions raised by the simulation.
 
   ComponentItem = concept x
-    ## Uniform way of addressing ports, links, and timers
+    ## Uniform way of addressing anything stored in a Component that
+    ## needs a back reference to the component.
     `comp=`(x, Component)
 
 
@@ -98,10 +100,9 @@ method runComponent*(comp: Component, sim: Simulator, isStartup = false, isShutd
 
 method updateNextEvent(comp: Component) {.base.};
 
-template setBackPointers*(c: Component, sim: Simulator) =
+template setBackPointers(c: Component, sim: Simulator) =
   ## Set the component's simulator reference to sim and all the ports,
   ## links, and timers to have a reference to comp.
-  # TODO: Don't export this
   c.sim = sim
   for name, value in fieldPairs(c[]):
     when value is ComponentItem:
@@ -115,13 +116,15 @@ template setBackPointers*(c: Component, sim: Simulator) =
 #
 
 proc `<`*[M](e0, e1: Event[M]): bool =
+  ## Compare two events by time. This is exported so the heap works
+  ## properly in generic code in this module.
   e0.time < e1.time
 
 #
 # SimulationTime
 #
 
-proc update*(t0, t1: SimulationTime): SimulationTime =
+proc update(t0, t1: SimulationTime): SimulationTime =
   if t0 == noEvent:
     return t1
   if t1 == noEvent:
@@ -215,7 +218,7 @@ proc addEvent[M](port: var Port[M], event: sink Event[M]) =
   port.events.push event
 
 
-proc nextEventTime*[M](port: Port[M]): SimulationTime =
+proc nextEventTime[M](port: Port[M]): SimulationTime =
   ## Return the earliest event time of all events pending on this
   ## port.
   if len(port.events) == 0:
@@ -224,7 +227,7 @@ proc nextEventTime*[M](port: Port[M]): SimulationTime =
     return port.events[0].time
 
 
-iterator messages*[M](port: Port[M], time: SimulationTime): M =
+iterator messages[M](port: Port[M], time: SimulationTime): M =
   ## Iterate over all message in this port that happen at this time
   ## step. It is a serious programmatic error if any events are
   ## pending on this port that have a timestamp before the given time.
@@ -320,6 +323,7 @@ proc send*[M](link: var BcastLink[M], msg: M, extraDelay=0) =
   for port in mitems(link.ports):
     port.addEvent event
 
+
 proc connect[M](link: var BcastLink[M], port: Port[M]) =
   link.ports.add port
 
@@ -352,7 +356,7 @@ proc set*[M](timer: var Timer[M], msg: M, delay: SimulationTime) =
   timer.events.push Event[M](msg: msg, time: time)
 
 
-iterator messages*[M](timer: var Timer[M], time: SimulationTime): M =
+iterator messages[M](timer: var Timer[M], time: SimulationTime): M =
   ## Iterate over all message in this timer that happen at this time
   ## step. It is a serious programmatic error if any events are
   ## pending on this timer that have a timestamp before the given time.
@@ -361,7 +365,7 @@ iterator messages*[M](timer: var Timer[M], time: SimulationTime): M =
     yield timer.events.pop().msg
 
 
-proc nextEventTime*[M](timer: Timer[M]): SimulationTime =
+proc nextEventTime[M](timer: Timer[M]): SimulationTime =
   ## Return the earliest event time of all events pending on this
   ## timer.
   if len(timer.events) == 0:
@@ -415,6 +419,8 @@ template shutdown*(shutdownBody: untyped): untyped {.dirty.} =
 
 
 template onTimer*(timer: typed, msgName: untyped, onMessageBody: untyped): untyped {.dirty.} =
+  bind nextEventTime, messages, update
+
   block:
     if not desim_isShutdown and not desim_isStartup:
       for msgName in timer.messages simulator.currentTime:
@@ -423,6 +429,8 @@ template onTimer*(timer: typed, msgName: untyped, onMessageBody: untyped): untyp
 
 
 template onMessage*(port: typed, msgName: untyped, onMessageBody: untyped): untyped {.dirty.} =
+  bind nextEventTime, messages, update
+
   block:
     if not desim_isShutdown and not desim_isStartup:
       for msgName in port.messages simulator.currentTime:
@@ -475,9 +483,9 @@ macro component*(comp: untyped, ComponentType: untyped, body: untyped): untyped 
       `comp`.nextEvent = noEvent
       for name, value in fieldPairs(`comp`[]):
         when value is Port:
-          `comp`.nextEvent = update(`comp`.nextEvent, value.nextEventTime)
+          `comp`.nextEvent = update(`comp`.nextEvent, `nextEventTime`(value))
         when value is Timer:
-          `comp`.nextEvent = update(`comp`.nextEvent, value.nextEventTime)
+          `comp`.nextEvent = update(`comp`.nextEvent, `nextEventTime`(value))
 
     method runComponent*(`comp`: `ComponentType`, `simulator`: Simulator, `isStartup` = false, `isShutdown` = false) {.locks:"unknown".} =
 
