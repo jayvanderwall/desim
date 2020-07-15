@@ -96,6 +96,10 @@ component comp, LogComponent:
     # Anything that comes here has already been pre-filtered.
     comp.write msg
 
+  shutdown:
+    for msg, _ in remainingMessages(comp.port):
+      comp.write msg
+
 #
 # LoggerBuilder
 #

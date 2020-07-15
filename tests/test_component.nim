@@ -333,3 +333,56 @@ test "Component with indirect link":
   sim.run()
 
   check(expMessage == receiver.msg)
+
+#
+# Remaining messages at shutdown
+#
+
+type
+  SendQuitComponent = ref object of Component
+    link: Link[int]
+    msg: int
+  ReceiveRemainingComponent = ref object of Component
+    port: Port[int]
+    msgs: seq[int]
+    badMsgs: seq[int]
+
+proc newSendQuitComponent(msg: int): SendQuitComponent =
+  SendQuitComponent(msg: msg, link: newLink[int](1))
+
+component comp, SendQuitComponent:
+
+  startup:
+    comp.link.send comp.msg
+    simulator.quit()
+
+proc newReceiveRemainingComponent(): ReceiveRemainingComponent =
+  ReceiveRemainingComponent(port: newPort[int]())
+
+component comp, ReceiveRemainingComponent:
+
+  for msg in messages(comp.port):
+    comp.badMsgs.add msg
+
+  shutdown:
+    for msg, _ in remainingMessages(comp.port):
+      comp.msgs.add msg
+
+
+test "Checking remaining messages at shutdown":
+  var
+    sim = newSimulator()
+    expValue: int = 42
+    sender = newSendQuitComponent(expValue)
+    receiver = newReceiveRemainingComponent()
+
+  sim.register sender
+  sim.register receiver
+
+  connect(sender.link, receiver.port)
+
+  sim.run()
+
+  check(len(receiver.badMsgs) == 0)
+  require(len(receiver.msgs) == 1)
+  check(sender.msg == receiver.msgs[0])

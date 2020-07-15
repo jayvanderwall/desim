@@ -237,6 +237,12 @@ iterator messages[M](port: Port[M], time: SimulationTime): M =
   while port.events.len() != 0 and port.events[0].time == time:
     yield port.events.pop().msg
 
+
+iterator allMessages[M](port: var Port[M]): (M, SimulationTime) =
+  ## Iterate over all messages regardless of timestep.
+  for i in 0..<len(port.events):
+    yield (port.events[i].msg, port.events[i].time)
+
 #
 # BaseLink
 #
@@ -367,6 +373,12 @@ iterator messages[M](timer: var Timer[M], time: SimulationTime): M =
     yield timer.events.pop().msg
 
 
+iterator allMessages[M](timer: var Timer[M]): (M, SimulationTime) =
+  ## Iterate over all messages regardless of timestep.
+  for event in timer.events:
+    yield (event.msg, event.time)
+
+
 proc nextEventTime[M](timer: Timer[M]): SimulationTime =
   ## Return the earliest event time of all events pending on this
   ## timer.
@@ -429,6 +441,15 @@ iterator messages*[M](timer: var Timer[M]): M =
   timer.comp.nextEvent = update(timer.comp.nextEvent, nextEventTime(timer))
 
 
+iterator remainingMessages*[M](timer: var Timer[M]): (M, SimulationTime) =
+  ## Iterate over all remaining messages and the time they would have
+  ## been received at. This is only effective within a shutdown block.
+
+  if timer.comp.isShutdown:
+    for msgTime in timer.allMessages:
+      yield msgTime
+
+
 iterator messages*[M](port: var Port[M]): M =
   ## Iterate over all messages on this port at this time step.
 
@@ -436,6 +457,15 @@ iterator messages*[M](port: var Port[M]): M =
     for msg in port.messages port.comp.sim.currentTime:
       yield msg
   port.comp.nextEvent = update(port.comp.nextEvent, nextEventTime(port))
+
+
+iterator remainingMessages*[M](port: var Port[M]): (M, SimulationTime) =
+  ## Iterate over all remaining messages and the time they would have
+  ## been received at. This is only effective within a shutdown block.
+
+  if port.comp.isShutdown:
+    for msgTime in port.allMessages:
+      yield msgTime
 
 
 template ignoreUnused(thing: untyped): untyped =
