@@ -12,8 +12,10 @@ import random/urandom
 import random/mersenne
 import deques
 import heapqueue
+import strformat
 
 import desim
+import desim/components/logger
 import alea
 
 proc minutes(sec: SimulationTime): SimulationTime =
@@ -65,6 +67,7 @@ type
     ## second.
     line: Link[Customer]
     arrival: Timer[bool]  # The message type is not used
+    logger: Logger
 
     # Random variables determining the behavior of new customers.
     meanArrival: alea.Poisson
@@ -79,7 +82,8 @@ proc newEntrance(meanArrival: Poisson,
                  hasIssues: Choice[bool],
                  shutdownTime: SimulationTime): Entrance =
   ## Create a new Entrance using default latencies.
-  Entrance(line: newLink[Customer](entranceToLine),
+  Entrance(name: "entrance",
+           line: newLink[Customer](entranceToLine),
            arrival: newTimer[bool](), meanArrival: meanArrival,
            hasBags: hasBags, hasIssues: hasIssues, shutdownTime: shutdownTime)
 
@@ -113,6 +117,10 @@ component comp, Entrance:
     # arrive. Create the customer, then figure out when the next one
     # arrives, and reschedule this handler.
     let cust = comp.makeCustomer simulator.currentTime
+    comp.logger.info("new customer",
+                     ("hasBags", cust.hasBags),
+                     ("hasIssues", cust.hasIssues),
+                     ("id", cust.id))
     comp.line.send cust
 
     # Schedule this timer again
@@ -130,13 +138,15 @@ type
     customerIn: Port[Customer]
     customerOut: BcastLink[(Customer, int)]
     counterReady: Port[int]
+    logger: Logger
 
     customers: Deque[Customer]
     readyCounters: seq[int]
 
 proc newLine(): Line =
   ## Create a new Line with default objects
-  Line(customerIn: newPort[Customer](),
+  Line(name: "line",
+       customerIn: newPort[Customer](),
        customerOut: newBcastLink[(Customer, int)](lineToCounter),
        counterReady: newPort[int](),
        customers: initDeque[Customer]())
@@ -152,17 +162,20 @@ proc sendCustomers(line: Line) =
 
 component comp, Line:
 
-  echo "line.customerIn.len: ", comp.customerIn.events.len
+  comp.logger.debug("Processing line",
+                    ("length", comp.customerIn.events.len))
 
   for customer in messages(comp.customerIn):
     var
       customer = customer
-    echo "New customer in line"
+    comp.logger.debug("New customer in line",
+                      ("id", customer.id))
     customer.enterLineTime = simulator.currentTime  
     comp.customers.addLast customer
 
   for counter in messages(comp.counterReady):
-    echo "Counter ", counter, " is ready"
+    comp.logger.debug("Counter is ready",
+                      ("id", counter))
     comp.readyCounters.add counter
 
   comp.sendCustomers
@@ -176,12 +189,14 @@ type
     ## One station at the check-in counter.
     customerIn: Port[(Customer, int)]
     ready: Link[int]
+    logger: Logger
 
     index: int
 
 
 proc newCounter(index: int): Counter =
-  Counter(customerIn: newPort[(Customer, int)](),
+  Counter(name: fmt"counter {index}",
+          customerIn: newPort[(Customer, int)](),
           ready: newLink[int](baseCustomerTime),
           index: index)
 
@@ -199,16 +214,16 @@ proc calculateExtraWaitTime(customer: Customer): SimulationTime =
   return time
 
 
-proc display(customer: Customer) =
+proc logCustomer(logger: var Logger, customer: Customer) =
   ## Display a customer's data upon leaving the simulation.
-  echo "Customer ", customer.id, " done"
-  echo " bags: ", customer.hasBags
-  echo " issues: ", customer.hasIssues
-  echo " enter time: ", customer.enterSimTime
-  echo " line time: ", customer.enterLineTime
-  echo " counter time: ", customer.enterCounterTime
-  echo " leave time: ", customer.leaveSimTime
-
+  logger.info("Customer done",
+              ("id", customer.id),
+              ("bags", customer.hasBags),
+              ("issues", customer.hasIssues),
+              ("enter time", customer.enterSimTime),
+              ("line time", customer.enterLineTime),
+              ("counter time", customer.enterCounterTime),
+              ("leave time", customer.leaveSimTime))
 
 component comp, Counter:
 
@@ -223,11 +238,10 @@ component comp, Counter:
       extra = customer.calculateExtraWaitTime
 
     if index == comp.index:
-      echo "Customer at counter ", comp.index
       customer.enterCounterTime = simulator.currentTime
       customer.leaveSimTime = simulator.currentTime + comp.ready.latency + extra
       comp.ready.send comp.index, extra
-      customer.display
+      logCustomer(comp.logger, customer)
 
 #
 # Run Simulation
@@ -245,17 +259,25 @@ proc main() =
                       hasIssues,
                       simulationDuration)
     line = newLine()
+    logComponent = newLogComponent()
+    logBuilder = newLoggerBuilder(logComponent)
 
   sim.register ent
   sim.register line
+  sim.register logComponent
 
   connect(ent.line, line.customerIn)
+
+  logBuilder.setLevel LogLevel.debug
+  logBuilder.attach ent
+  logBuilder.attach line
 
   for i in 0..<1:
     var counter = newCounter(i)
     sim.register counter
     connect(line.customerOut, counter.customerIn)
     connect(counter.ready, line.counterReady)
+    logBuilder.attach counter
 
   echo "Running simulation"
   sim.run()

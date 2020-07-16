@@ -82,7 +82,7 @@ proc find*(msg: LogMessage, key: string): Option[string] =
 proc logToStdout(msg: LogMessage) =
   ## Log the given message to standard out.
   stdout.write "{" & join(msg.fields.mapIt(fmt"""{escape(it[0])}: {escape(it[1])}"""), ", ") &
-    "}"
+    "}\n"
 
 
 proc newLogComponent*(name = "logger", write: proc (msg: LogMessage) = logToStdout): LogComponent =
