@@ -8,14 +8,25 @@ type
 
   SimulationTime* = int
     ## The type of all time variables. The simulation proceeds by
-    ## discrete ticks. It is up to the user to interpret the meaning
-    ## of the ticks.
+    ## discrete ticks. No intrinsic unit is used for the ticks, so it
+    ## is up to the user to interpret them as appropriate for their
+    ## domain.
 
   Simulator* = ref object
-    ## The entirety of the connected simulation. A single
-    ## ``Simulator`` object exists for a simulation. The user must
-    ## create this and use it to `register<#register>`_ other
+    ## The orchestrator for a simulation. A single ``Simulator``
+    ## object exists for a simulation. The user must create this and
+    ## use it to `register<#register,Simulator,C>`_ other
     ## `components<#Component>`_.
+    ##
+    ## After creating a ``Simulator``, you should create all necessary
+    ## ``Component`` objects and ``register`` them. Then
+    ## `connect<#connect,L,Port[M]>`_ the various ``Link`` and
+    ## ``Port`` objects. Call `run<#run,Simulator>`_ to start the
+    ## simulation. The simulation will run until no more messages are
+    ## pending, a predetermined time has been reached, or a component
+    ## `requests<#quit,Simulator>`_ shutdown.
+    ##
+
     currentTime: SimulationTime
     nextEvent: SimulationTime
     components: seq[Component]
@@ -57,7 +68,7 @@ type
     ## efficiently parallelize the components.
     ##
     ## A ``Link`` is associated with outgoing messages only. Incoming
-    ## messages are handled by the ``Port`` type.
+    ## messages are handled by the `Port<#Port>`_ type.
     port: Port[M]
 
   BcastLink*[M] = object of BaseLink
@@ -68,20 +79,23 @@ type
   BatchLink*[M] = object of Link[M]
     ## Connect to a port with implementation-defined latency that may
     ## not be consistent message to message. A BatchLink is useful for
-    ## most-efficiently moving simulation metadata such as statistics
-    ## or log messages.
+    ## most-efficiently moving simulation metadata such as log
+    ## messages. If you're not sure, use a ``Link`` or ``BcastLink``
+    ## instead.
 
   Port*[M] = ref object
-    ## Endpoint for messages of type ``M``.
+    ## Endpoint for messages of type ``M``. To receive messages, a
+    ## ``Component`` must define one or more ``Port`` objects and then
+    ## other components' ``Link`` objects must be connected to them.
     comp {.cursor.}: Component
     events: HeapQueue[Event[M]]
 
   Timer*[M] = object
     ## A Timer allows a component to schedule an event in the future
-    ## for itself to handle. This acts like a link and port pair for
-    ## the same component.
-    events: HeapQueue[Event[M]]
+    ## for itself to handle. This acts like a ``Link`` and ``Port``
+    ## pair for the same component.
     comp {.cursor.}: Component
+    events: HeapQueue[Event[M]]
 
   SimulationError* = object of CatchableError
     ## Base exception for all exceptions raised by the simulation.
@@ -138,16 +152,20 @@ proc update(t0, t1: SimulationTime): SimulationTime =
 #
 
 proc newSimulator*(quitTime = SimulationTime(0)): Simulator =
+  ## Create a new ``Simulator`` object. The simulator can be given a
+  ## pre-determined simulation time to quit. The default is to run
+  ## until a different termination condition is met.
   return Simulator(quitTime: quitTime, nextEvent: noEvent)
 
 
 proc currentTime*(sim: Simulator): SimulationTime =
   return sim.currentTime
+  ## Return the current simulation time.
 
 
 proc register*[C](sim: Simulator, comp: C) =
   ## Register a component with the simulator. Must be called before
-  ## ``run``. Unregistered components can also not be connected.
+  ## ``run``.
 
   sim.components.add comp
   comp.setBackPointers sim
@@ -182,8 +200,9 @@ proc updateNextEvent(sim: Simulator) =
 
 
 proc run*(sim: Simulator) =
-  ## Run the simulation until no more messages remain or another
-  ## termination condition is met.
+  ## Run the simulation until no more messages remain, the
+  ## predetermined ``quitTime`` has been reached, or a component calls
+  ## the ``Simulator.quit`` proc.
 
   # Initialize each component
   for comp in sim.components:
@@ -205,6 +224,9 @@ proc quit*(sim: Simulator) =
   ## Tell the simulator to stop processing new messages. The simulator
   ## will quit once control is returned, usually at the end of the
   ## message handler currently being executed.
+  ##
+  ## After this call, all components will have their shutdown code
+  ## executed, if any.
   sim.quitRequested = true
 
 #
@@ -212,6 +234,7 @@ proc quit*(sim: Simulator) =
 #
 
 proc newPort*[M](): Port[M] =
+  ## Create a new ``Port`` object.
   return Port[M]()
 
 proc addEvent[M](port: var Port[M], event: sink Event[M]) =
@@ -248,15 +271,16 @@ iterator allMessages[M](port: var Port[M]): (M, SimulationTime) =
 #
 
 proc latency*(link: BaseLink): SimulationTime =
-  ## The minimum latency of messages sent on this link.
+  ## Return the minimum latency of messages sent on this link.
   return link.latency
 
 #
 # Link
 #
 
-proc baseNewLink*[M; T: Link[M]=Link[M]](latency: SimulationTime): T =
-  ## Create a new ``Link`` with a minimum latency.
+proc baseNewLink[M; T: Link[M]](latency: SimulationTime): T =
+  ## Create a new ``Link`` with a minimum latency. This serves as a
+  ## shared constructor for ``Link`` classes.
   if latency <= 0:
     raise newException(SimulationError, "Invalid link latency " & $latency)
   # The other fields are set when connected
@@ -265,18 +289,19 @@ proc baseNewLink*[M; T: Link[M]=Link[M]](latency: SimulationTime): T =
 
 proc newLink*[M](latency: SimulationTime): Link[M] =
   return baseNewLink[M, Link[M]](latency)
+  ## Create a new ``link`` with some base latency.
 
 
 proc send*[M](link: var Link[M], msg: M, extraDelay=0) =
   ## Send a message over a ``Link``. Adds any value for `extraDelay`
   ## to the latency and uses that as the total delay for this
-  ## message. A message sent on a link does not have to wait for all
-  ## previously sent messages to arrive if their delay time is greater
-  ## than its is.
+  ## message. Because each message may have a unique delay, messages
+  ## are not necessarily received in the order they are sent.
 
   if link.port == nil:
     # TODO: Maybe there are actually good use cases for this and the
-    # message should just be ignored.
+    # message should just be ignored. OTOH, if the user wants to allow
+    # 0 or 1 connections a BcastLink will allow that.
     raise newException(SimulationError, "Link was not connected")
 
   if extraDelay < 0:
@@ -291,6 +316,7 @@ proc send*[M](link: var Link[M], msg: M, extraDelay=0) =
 
 
 proc connect[M](link: var Link[M], port: Port[M]) =
+  ## Link-specific connection
   link.port = port
 
 #
@@ -309,9 +335,8 @@ proc newBcastLink*[M](latency: SimulationTime): BcastLink[M] =
 proc send*[M](link: var BcastLink[M], msg: M, extraDelay=0) =
   ## Send a message over a ``BcastLink``. Adds any value for
   ## `extraDelay` to the latency and uses that as the total delay for
-  ## this message. A message sent on a link does not have to wait for
-  ## all previously sent messages to arrive if their delay time is
-  ## greater than its.
+  ## this message. Because each message may have a unique delay,
+  ## messages are not necessarily received in the order they are sent.
   ##
   ## Unlike a ``Link``, it is not an error to send to an unconnected
   ## ``BcastLink``.
@@ -352,12 +377,18 @@ proc newBatchLink*[M](): BatchLink[M] =
 #
 
 proc newTimer*[M](): Timer[M] =
+  ## Create a new ``Timer`` used to send and receive messages by the
+  ## same component.
   return Timer[M]()
 
 
 proc set*[M](timer: var Timer[M], msg: M, delay: SimulationTime) =
-  ## Set this timer to emit a message at some time in the future.
+  ## Set this timer to emit a message at some time in the
+  ## future. ``delay`` cannot be zero.
   if delay <= 0:
+    # If delay == 0 ends up being a useful use case it could in theory
+    # be supported but doesn't play well with how the rest of the
+    # framework is implemented.
     raise newException(SimulationError, "Timer delay must be > 0")
   let
     time = timer.comp.sim.currentTime + delay
@@ -392,15 +423,15 @@ proc nextEventTime[M](timer: Timer[M]): SimulationTime =
 #
 
 proc connect*[L: BaseLink, M](link: var L, port: Port[M]) =
-  ## Connect a link and a port.
+  ## Connect a ``Link`` and a ``Port``.
 
   if link.comp != nil and port.comp != nil:
     if link.comp.sim != port.comp.sim:
       raise newException(SimulationError,
                          "Cannot connect components with different simulators")
 
-  # Note: This doesn't recurse because in this context the other
-  # connect procs are more specific that the one we're in.
+  # Note: This actually calls a different proc and therefore doesn't
+  # recurse.
   link.connect port
 
 #
@@ -410,7 +441,9 @@ proc connect*[L: BaseLink, M](link: var L, port: Port[M]) =
 method runComponent*(comp: Component, sim: Simulator, isStartup = false, isShutdown = false) {.base,locks:"unknown".} =
   ## Base method for the implementations of each component. This is
   ## run once at component startup, whenever new messages arrive, and
-  ## once again at component shutdown.
+  ## once again at component shutdown. Do not create or run this
+  ## method directly. Instead use the `component
+  ## template<#component.t,untyped,untyped,untyped>`_.
   discard
 
 
@@ -443,7 +476,8 @@ iterator messages*[M](timer: var Timer[M]): M =
 
 iterator remainingMessages*[M](timer: var Timer[M]): (M, SimulationTime) =
   ## Iterate over all remaining messages and the time they would have
-  ## been received at. This is only effective within a shutdown block.
+  ## been received at. This is only effective within a ``shutdown``
+  ## block.
 
   if timer.comp.isShutdown:
     for msgTime in timer.allMessages:
@@ -461,7 +495,8 @@ iterator messages*[M](port: var Port[M]): M =
 
 iterator remainingMessages*[M](port: var Port[M]): (M, SimulationTime) =
   ## Iterate over all remaining messages and the time they would have
-  ## been received at. This is only effective within a shutdown block.
+  ## been received at. This is only effective within a ``shutdown``
+  ## block.
 
   if port.comp.isShutdown:
     for msgTime in port.allMessages:
@@ -480,16 +515,14 @@ template component*(comp: untyped, ComponentType: untyped, body: untyped): untyp
   ## refer to the component as, and the component's type, then
   ## introduces a scope to define the behavior of the component.
   ##
-  ## This template introduces several other templates locally for
-  ## different actions. The ``shutdown`` template takes no arguments
-  ## and is run once when the node is cleanly shutdown. The
-  ## ``startup`` template is similar and runs on startup. The
-  ## ``onMessage`` template takes a port and a name for the messages and
-  ## runs its body for each new message. Similarly ``onTimer`` takes a
-  ## timer and message name and handles timers. A variable named
-  ## ``simulator`` is automatically added to the environment and
-  ## refers to the ``Simulator`` type that registered this
-  ## ``Component``.
+  ## Inside the block created by this template template several other
+  ## templates are useful for different actions. The ``shutdown``
+  ## template takes no arguments and is run once when the node is
+  ## cleanly shutdown. The ``startup`` template is similar and runs on
+  ## startup. The ``messages`` iterator iterates of the messages on a
+  ## ``Port`` or ``Timer``. A variable named ``simulator`` is
+  ## automatically added to the environment and refers to the
+  ## ``Simulator`` type that registered this ``Component``.
   ##
   ## This template may also add several variables starting with
   ## ``desim_`` to the local namespace, so do not start your variables
@@ -502,9 +535,11 @@ template component*(comp: untyped, ComponentType: untyped, body: untyped): untyp
   ##     comp.myLink.send newMsg("hello")
   ##   shutdown:
   ##     log.info("Shutting down", sim.currentTime)
-  ##   onMessage comp.myPort, msg:
+  ##     for msg in remainingMessages(comp.myPort):
+  ##       log.info("Remaining message", msg)
+  ##   for msg in messages(comp.myPort):
   ##     log.info("Received message", msg)
-  ##   onTimer comp.myTimer, msg:
+  ##   for msg in messages(comp.myTimer):
   ##     log.info("Timer: ", msg)
   ## ```
 
@@ -540,8 +575,8 @@ template component*(comp: untyped, ComponentType: untyped, body: untyped): untyp
 proc `comp=`*[I: BaseLink|Timer|Port](item: var I, comp: Component) =
     ## Set the Component backpointer for a port, link, or timer. This
     ## is normally not necessary, but if an item is stored in an
-    ## unusual way (i.e. not a field or inside a seq) then this must
-    ## be called manually before connecting the item.
+    ## unusual way (i.e. not a field or inside a seq) then the use
+    ## must call this method manually before connecting the item.
     if item.comp != nil and item.comp != comp:
       raise newException(SimulationError, "Component already set")
     item.comp = comp
