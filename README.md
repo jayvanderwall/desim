@@ -1,6 +1,6 @@
 # Desim
 
-Desim is a Discrete Event Simulator modeled on [SST](http://sst-simulator.org/) but written in Nim and with a focus on making your own custom components. Desim allows you to model your problem with several components that communicate using messages. The structure of Desim focuses on message sending and receiving in a way that will allow parallel execution. At the moment, however, Desim only runs on a single thread.
+Desim is a [Discrete Event Simulator](https://en.wikipedia.org/wiki/Discrete-event_simulation) modeled on [SST](http://sst-simulator.org/) but written in Nim and with a focus on making your own custom components. Desim allows you to model your problem with several components that communicate using messages. The structure of Desim focuses on message sending and receiving in a way that will allow parallel execution. At the moment, however, Desim only runs on a single thread.
 
 # Quick Examples
 
