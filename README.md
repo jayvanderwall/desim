@@ -178,3 +178,49 @@ proc main() =
 main()
 
 ```
+
+# Types
+
+The operation of a discrete event simulation using Desim requires several types. Most of them have already been introduced in the examples section. More detailed API information can be found by compiling the documentation from the code.
+
+## Simulator
+
+This class is in charge of orchestrating a simulation. Since Desim uses no global variables, all simulation state not contained in a `Component` is found in the `Simulator`. From the user's perspective this is mostly the current simulation time retrieved with the `currentTime` proc. All components must be `register`'d with the same simulator before calling the simulator's `run` command.
+
+## Component
+
+All functionality is expected to be provided by components derived from the `Component` base class. The base class has one user-accessible field, `name`, which can be any string. The `name` is currently not used by the Desim framework but is used by the logging framework. Communication between components requires creating fields that are a `Link`, `Port`, or `Timer`, explained further in their own sections.
+
+The behavior of a component is described with the `component` template. The code inside this macro is run once when the component is first created, once every simulation step in which it will receive at least one message, and once right before it is shut down. Any code in the template will be run every time one of those events happens. To limit code execution to those events, use the `startup` and `shutdown` templates and the `messages` iterator. See the examples section for usage ideas.
+
+## Link
+
+A `Link` object handles the outgoing end of inter-component communication. A `Link` is a generic type that takes the message type as its generic argument. A `Link` will also have a base latency which cannot be zero. This is in immitation of SST, which uses this nonzero latency as a way to automatically separate components into different threads or MPI ranks. While Desim is currently single-threaded, it takes the same approach so as to leave open the option of efficient parallelization in the future. A message is sent with the `send` proc which takes the message and an optional amount of extra time, which is zero by default.
+
+Each `Link` must be connected to exactly one `Port`. It is an error to not connect a `Link` or to connect it to more than one `Port`. The `Port` must accept the same message type as the `Link` sends.
+
+## BcastLink
+
+A `BcastLink` is used to broadcast messages to many `Port` objects. It operates identically to a `Link`, except without the restriction that it be connected to one, or indeed any, `Port`.
+
+## BatchLink
+
+The `BatchLink` type is another type of `Link` which is likely not directly useful. It does not take a latency; rather the framework defines the latency for each message. The framework is therefore free to choose an efficient latency, or buffering scheme, in order to combine communication between components in the most efficient way possible. Since Desim is currently single threaded this is not taken advantage of, but could be.
+
+Since the whole point of a discrete event simulation is to simulate timing of actions between components, this link type is rarely useful. It is used in the logger, since the logger is a component but not part of the domain being simulated. Log messages may thus be batched and efficiently delivered to the logger. This behavior is all hidden from the user.
+
+## Port
+
+All messages sent on a link are received on a `Port`. The `Port` is a generic type that takes the message type as its argument. The messages on a port can be read out using the `messages` iterator inside the `component` template. All messages must be read in the same simulation tick that they are received.
+
+## Timer
+
+A timer takes care of the degenerate, but useful, case where a link and port that are connected together are part of the same component by design. Such self-loops may occur frequently enough to warrant special handling. A `Timer` is also a generic type that takes the message type as its argument. Messages are sent with the `send` proc and received with the `messages` iterator.
+
+## SimulationTime
+
+The time in the simulation is tracked with a `SimulationTime` object. Currently implemented as an `int`, this value will always act like an integer but the actual implementation may change to accommodate larger numbers.
+
+## SimulationError
+
+All exceptions thrown by the Desim framework will be a `SimulationError`.
